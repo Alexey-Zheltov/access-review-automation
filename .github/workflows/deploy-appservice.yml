@@ -1,0 +1,91 @@
+# Build, test and deploy the portal to Azure App Service (code deployment, no container registry).
+# The web app, the database and the other Azure resources come from deploy/bicep/appservice.bicep
+# (or appservice.json in the Azure portal: "Deploy a custom template"). This workflow only deploys the code.
+#
+# Sign-in to Azure: OpenID Connect with a user-assigned managed identity. No secret is stored in GitHub.
+# The identity needs the role "Website Contributor" on the web app, and a federated credential for this
+# repository and the environment "production".
+#
+# Settings > Secrets and variables > Actions > Variables (repository or environment "production"):
+#   AZURE_CLIENT_ID        client id of the managed identity
+#   AZURE_TENANT_ID        tenant id
+#   AZURE_SUBSCRIPTION_ID  subscription of the web app
+#   AZURE_RESOURCE_GROUP   resource group of the web app
+#   APPSERVICE_NAME        name of the web app
+#   RUNNER_LABELS          optional, JSON list of runner labels. Default: ["self-hosted", "linux", "access-review"].
+#                          Set ["ubuntu-latest"] to use a GitHub-hosted runner.
+#
+# Runner tools: Azure CLI, curl, zip (GitHub-hosted Ubuntu runners have them). The .NET SDK is installed by the workflow.
+name: deploy-appservice
+
+on:
+  workflow_dispatch:
+  # To deploy every push to main, add:
+  # push:
+  #   branches: [main]
+  #   paths-ignore: ['**.md', 'docs/**']
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-appservice
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted", "linux", "access-review"]') }}
+    environment:
+      name: production
+      url: https://${{ vars.APPSERVICE_NAME }}.azurewebsites.net
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      APP_NAME: ${{ vars.APPSERVICE_NAME }}
+      # Keeps the Azure CLI sign-in inside the job folder: a self-hosted runner does not keep it for later jobs.
+      AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Unit tests
+        run: dotnet test AccessReviewPortal.slnx -c Release
+
+      - name: Build the package
+        run: |
+          dotnet publish src/AccessReviewPortal/AccessReviewPortal.csproj -c Release -o publish
+          (cd publish && zip -qr ../portal.zip .)
+
+      - name: Sign in to Azure (OpenID Connect)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to App Service
+        run: |
+          # On a new web app (no code yet) the start-up tracking of 'az webapp deploy' can wait 10 minutes and then fail,
+          # although the portal starts. So the tracking is used only when the portal already runs; the next step checks the start.
+          if curl -fsS --max-time 20 "https://$APP_NAME.azurewebsites.net/healthz" > /dev/null 2>&1; then track=true; else track=false; fi
+          az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --src-path portal.zip --type zip \
+            --track-status "$track" --only-show-errors --output none
+
+      - name: Health check
+        run: |
+          url="https://$APP_NAME.azurewebsites.net/healthz"
+          for i in $(seq 1 30); do
+            if [ "$(curl -fsS --max-time 20 "$url" 2>/dev/null)" = "ok" ]; then echo "The portal answers: $url"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::No 'ok' from $url after 5 minutes. Start log: az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_NAME"
+          exit 1
+
+      - name: Sign out of Azure
+        if: always()
+        run: az account clear || true

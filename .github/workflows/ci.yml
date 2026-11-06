@@ -38,3 +38,14 @@ jobs:
         run: |
           az bicep install
           for f in deploy/bicep/*.bicep; do az bicep build --file "$f" --stdout > /dev/null; done
+
+      # deploy/bicep/appservice.json is used by "Deploy a custom template" in the Azure portal.
+      - name: ARM template matches the Bicep file
+        run: |
+          az bicep build --file deploy/bicep/appservice.bicep --outfile "$RUNNER_TEMP/appservice.json"
+          jq -S 'del(.. | ._generator?)' "$RUNNER_TEMP/appservice.json" > "$RUNNER_TEMP/new.json"
+          jq -S 'del(.. | ._generator?)' deploy/bicep/appservice.json > "$RUNNER_TEMP/old.json"
+          if ! diff -q "$RUNNER_TEMP/new.json" "$RUNNER_TEMP/old.json" > /dev/null; then
+            echo "::error file=deploy/bicep/appservice.json::Out of date. Run: az bicep build --file deploy/bicep/appservice.bicep --outfile deploy/bicep/appservice.json"
+            exit 1
+          fi

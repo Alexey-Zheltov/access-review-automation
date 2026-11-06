@@ -389,6 +389,24 @@ resource logs 'Microsoft.Web/sites/config@2024-04-01' = {
   }
 }
 
+// Deployments sign in with Microsoft Entra ID (az webapp deploy, GitHub Actions with OpenID Connect).
+// Basic authentication (publishing user name and password) for the SCM site and FTP is off.
+resource scmBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-04-01' = {
+  parent: webApp
+  name: 'scm'
+  properties: {
+    allow: false
+  }
+}
+
+resource ftpBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-04-01' = {
+  parent: webApp
+  name: 'ftp'
+  properties: {
+    allow: false
+  }
+}
+
 output portalUrl string = portalUrl
 output webAppName string = webApp.name
 output postgresFqdn string = postgres.outputs.fqdn
