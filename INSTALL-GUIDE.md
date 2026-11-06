@@ -282,7 +282,7 @@ The VM keeps its `.env` and certificate. The pipeline only changes the images an
 
 File: `.github/workflows/deploy-access-review.yml`. The step-by-step setup of the self-hosted runner, variables and secrets is in [docs/GITHUB-RUNNER-SETUP.md](docs/GITHUB-RUNNER-SETUP.md).
 
-Start it with a push to `main`, or by hand:
+Start it by hand. In this repository the workflow has no push trigger, because a fork has no self-hosted runner. After you set up the runner, add the trigger at the top of the workflow file (see the comment there).
 
 ```bash
 gh workflow run deploy-access-review.yml -f target=ReservedVM_DockerCompose -f database=ContainerOnVM

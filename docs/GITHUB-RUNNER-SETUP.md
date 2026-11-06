@@ -185,7 +185,7 @@ docker logs access-review-runner --tail 5
 
 ## Step 7. Run the workflow
 
-A push to `main` starts the workflow. To start it by hand, with a choice of the target:
+Start the workflow by hand, with a choice of the target. To start it with every push to `main`, add the `push` trigger at the top of the workflow file (see the comment there).
 
 ```bash
 gh workflow run deploy-access-review.yml --repo <owner>/<repo> -f target=ReservedVM_DockerCompose -f database=ContainerOnVM
