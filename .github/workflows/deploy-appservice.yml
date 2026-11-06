@@ -44,9 +44,11 @@ jobs:
       DOTNET_NOLOGO: '1'
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       APP_NAME: ${{ vars.APPSERVICE_NAME }}
-      # Keeps the Azure CLI sign-in inside the job folder: a self-hosted runner does not keep it for later jobs.
-      AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-cli
     steps:
+      # Keeps the Azure CLI sign-in inside the job folder: a self-hosted runner does not keep it for later jobs.
+      - name: Azure CLI folder for this job
+        run: echo "AZURE_CONFIG_DIR=$RUNNER_TEMP/azure-cli" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
