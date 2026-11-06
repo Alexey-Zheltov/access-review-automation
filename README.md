@@ -1,4 +1,4 @@
-# Access Review Automation Portal (sample / prototype)
+# Access Review Automation Portal
 
 A prototype that builds one quarterly review list for **all** role assignments:
 Microsoft Entra ID roles and Azure RBAC on management group, subscription, resource group and resource level.
