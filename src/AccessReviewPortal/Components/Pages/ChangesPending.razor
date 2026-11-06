@@ -1,0 +1,377 @@
+@page "/changes"
+@page "/changes/{SnapshotId:int}"
+@page "/remediation"
+@inject SnapshotService Snapshots
+@inject RemediationService RemediationSvc
+@inject UserCapabilityChecker Capabilities
+@inject ConsentRedirector Consent
+@inject PendingChangesNotifier Notifier
+@inject NavigationManager Nav
+@inject AccessReviewPortal.Services.Azure.AzureClients Azure
+
+<PageTitle>Changes Pending</PageTitle>
+
+<h1 class="h4 mb-3">Changes pending</h1>
+
+@if (snapshots.Count == 0)
+{
+    <div class="alert alert-secondary">No completed snapshots yet.</div>
+}
+else
+{
+    <div class="row g-2 align-items-end mb-2">
+        <div class="col-lg-6">
+            <label class="form-label">Snapshot</label>
+            <select class="form-select" value="@SnapshotId" @onchange="OnSnapshotChangedAsync">
+                @foreach (var s in snapshots)
+                {
+                    var n = counts.GetValueOrDefault(s.Id);
+                    <option value="@s.Id">#@s.Id @s.Label (@s.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm"))@(n > 0 ? $" – {n} pending" : "")</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <a class="btn btn-outline-secondary" href="review/@SnapshotId">Back to the review</a>
+        </div>
+    </div>
+
+    <p class="small text-muted">
+        All removals approved in the review of this snapshot: <em>Approve Removal</em> on the Review page and <em>Remove from Group</em>
+        on the Group Permissions page. <strong>Apply</strong> makes every change that you are allowed to make, with your own
+        Microsoft Entra ID sign-in. The portal itself has read-only rights. To leave out a change, click <em>Cancel</em>: the decision
+        goes back to Pending.
+    </p>
+
+    <div class="card mb-3 @(pending.Count > 0 ? "border-warning" : "border-success")">
+        <div class="card-body d-flex flex-wrap align-items-center gap-3">
+            @if (pending.Count == 0)
+            {
+                <span class="text-success">No changes pending in this snapshot.</span>
+            }
+            else if (!user.CanUseDelegatedTokens())
+            {
+                <button class="btn btn-danger btn-lg" disabled>Apply</button>
+                <span class="small text-muted">You signed in with the access key. Sign in with Microsoft Entra ID to apply changes.</span>
+            }
+            else if (checking)
+            {
+                <button class="btn btn-danger btn-lg" disabled>Apply</button>
+                <span class="small text-muted">Checking your rights for @pending.Count change(s)...</span>
+            }
+            else if (confirm)
+            {
+                <span>Apply <strong>@ready</strong> change(s) in Microsoft Entra ID and Azure as <strong>@user.GetUpn()</strong>? The access is removed at once.</span>
+                <button class="btn btn-danger" disabled="@busy" @onclick="ApplyAsync">@(busy ? "Applying..." : "Yes, apply")</button>
+                <button class="btn btn-outline-secondary" disabled="@busy" @onclick="() => confirm = false">Cancel</button>
+            }
+            else
+            {
+                <button class="btn btn-danger btn-lg" disabled="@(ready == 0)" @onclick="() => confirm = true">Apply @ready change(s)</button>
+                <div class="small">
+                    <div>as <strong>@user.GetUpn()</strong></div>
+                    @if (blocked > 0)
+                    {
+                        <div class="text-danger">@blocked change(s) need a role that you do not have. They stay pending for a colleague with this role.</div>
+                    }
+                    @if (onPremises > 0)
+                    {
+                        <div class="text-muted">@onPremises change(s) in groups synced from on-premises AD must be made in AD (see the optional script below).</div>
+                    }
+                    @if (capabilityError is not null)
+                    {
+                        <div class="text-danger">@capabilityError</div>
+                    }
+                </div>
+                @if (report?.ConsentScopes.Length > 0)
+                {
+                    <button class="btn btn-sm btn-outline-primary" @onclick="GrantConsent">Grant consent</button>
+                }
+            }
+        </div>
+    </div>
+
+    @if (notice is not null)
+    {
+        <div class="alert alert-info py-1 small">@notice</div>
+    }
+
+    @if (results is not null)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Result: @results.Count(r => r.Success) applied, @results.Count(r => !r.Success) not applied</div>
+            <ul class="list-group list-group-flush small">
+                @foreach (var r in results)
+                {
+                    <li class="list-group-item @(r.Success ? "text-success" : "text-danger")">@(r.Success ? "✔" : "✖") @r.Principal / @r.Role: @r.Message</li>
+                }
+            </ul>
+        </div>
+    }
+
+    @if (pending.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Pending (@pending.Count)</div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead>
+                        <tr><th>Change</th><th>Who</th><th>Access</th><th>Where</th><th>Approved by</th><th>Your rights</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in pending)
+                        {
+                            <tr>
+                                <td>
+                                    @c.ChangeText
+                                    @if (c.Status is not null)
+                                    {
+                                        <div class="small text-danger">Last attempt: @c.Status</div>
+                                    }
+                                </td>
+                                <td>@c.Principal<div class="small text-muted">@c.PrincipalUpn</div></td>
+                                <td>
+                                    @c.Access
+                                    @if (c.GroupAccess.Count > 0)
+                                    {
+                                        <div class="small text-muted">gives: @string.Join("; ", c.GroupAccess)</div>
+                                    }
+                                </td>
+                                <td>
+                                    @if (c.ScopeLevel is { } level)
+                                    {
+                                        <span class="badge level-@level">@DisplayText.Of(level)</span>
+                                    }
+                                    <span class="small">@c.Scope</span>
+                                </td>
+                                <td class="small">
+                                    @(c.ApprovedBy ?? "-")
+                                    <div class="text-muted">@c.ApprovedAtUtc?.ToString("yyyy-MM-dd HH:mm")</div>
+                                    <div class="text-muted">@c.Reason</div>
+                                </td>
+                                <td class="small">@CapabilityText(c)</td>
+                                <td><button class="btn btn-sm btn-link" title="Put the decision back to Pending" disabled="@busy" @onclick="() => CancelAsync(c)">Cancel</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (applied.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Applied (@applied.Count)</div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead>
+                        <tr><th>Applied (UTC)</th><th>By</th><th>Change</th><th>Who</th><th>Access</th><th>Result</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in applied)
+                        {
+                            <tr>
+                                <td class="small text-nowrap">@c.AppliedAtUtc?.ToString("yyyy-MM-dd HH:mm")</td>
+                                <td class="small">@c.AppliedBy</td>
+                                <td>@c.ChangeText</td>
+                                <td>@c.Principal<div class="small text-muted">@c.PrincipalUpn</div></td>
+                                <td>@c.Access <span class="small text-muted">@(c.ScopeLevel is null ? "" : "on " + c.Scope)</span></td>
+                                <td class="small text-success">@ResultText(c.Status)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    <details class="mb-4">
+        <summary class="small text-muted">Optional: the same changes as a PowerShell script</summary>
+        <p class="small mt-2">
+            Use the script only for groups synced from on-premises AD (run it on a domain-joined machine), or if you prefer to
+            run the changes yourself. Changes made with the script are not marked as applied in the portal.
+        </p>
+        <a class="btn btn-sm btn-outline-secondary" href="export/@SnapshotId/remediation.ps1" download target="_top">Download PowerShell script</a>
+        <pre class="script-preview mt-2 mb-0">@script</pre>
+    </details>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+    [Parameter] public int SnapshotId { get; set; }
+
+    private ClaimsPrincipal user = new();
+    private List<ScanSnapshot> snapshots = [];
+    private Dictionary<int, int> counts = [];
+    private List<RoleAssignmentSnapshot> pendingRows = [];
+    private List<GroupMemberDecision> pendingDecisions = [];
+    private Dictionary<string, GroupSnapshot> groups = [];
+    private List<AccessChange> pending = [];
+    private List<AccessChange> applied = [];
+    private CapabilityReport? report;
+    private string? capabilityError;
+    private int ready;
+    private int blocked;
+    private int onPremises;
+    private string script = "";
+    private string? notice;
+    private bool checking;
+    private bool confirm;
+    private bool busy;
+    private List<RevokeResult>? results;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        user = (await AuthState).User;
+        snapshots = (await Snapshots.GetSnapshotsAsync()).Where(s => s.Status == ScanStatus.Completed).ToList();
+        if (snapshots.Count == 0) return;
+        counts = await Snapshots.GetPendingCountsAsync();
+        if (SnapshotId == 0 || snapshots.All(s => s.Id != SnapshotId))
+        {
+            // The newest snapshot with pending changes, otherwise the newest snapshot.
+            SnapshotId = (snapshots.FirstOrDefault(s => counts.GetValueOrDefault(s.Id) > 0) ?? snapshots[0]).Id;
+        }
+        await LoadAsync();
+    }
+
+    private async Task OnSnapshotChangedAsync(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var id)) return;
+        Nav.NavigateTo($"changes/{id}");
+        SnapshotId = id;
+        results = null;
+        notice = null;
+        confirm = false;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        counts = await Snapshots.GetPendingCountsAsync();
+        var removedRows = await Snapshots.GetRowsAsync(SnapshotId, new ReviewFilter { Decision = "Removed" });
+        var memberDecisions = (await Snapshots.GetMemberDecisionsAsync(SnapshotId))
+            .Where(d => d.Decision == GroupMemberDecisionType.RemoveFromGroup).ToList();
+        groups = await Snapshots.GetGroupsAsync(SnapshotId);
+
+        pendingRows = removedRows.Where(r => !AccessChanges.IsDone(r.RemediationStatus)).ToList();
+        pendingDecisions = memberDecisions.Where(d => !AccessChanges.IsDone(d.RemediationStatus)).ToList();
+        pending = AccessChanges.Build(pendingRows, pendingDecisions, groups);
+        applied = AccessChanges.Build(removedRows.Where(r => AccessChanges.IsDone(r.RemediationStatus)),
+                memberDecisions.Where(d => AccessChanges.IsDone(d.RemediationStatus)), groups)
+            .OrderByDescending(c => c.AppliedAtUtc).ToList();
+
+        // What a group membership gives: the roles assigned to the group itself.
+        var groupIds = pending.Concat(applied).Where(c => c.GroupId is not null).Select(c => c.GroupId!).Distinct().ToList();
+        var groupAccess = await Snapshots.GetGroupAccessAsync(SnapshotId, groupIds);
+        foreach (var c in pending.Concat(applied).Where(c => c.GroupId is not null))
+        {
+            if (groupAccess.TryGetValue(c.GroupId!, out var list)) c.GroupAccess = c.GroupAccess.Union(list).ToList();
+        }
+
+        script = RemediationService.BuildScript(snapshots.First(s => s.Id == SnapshotId), removedRows, memberDecisions, groups, Azure.TenantId);
+        await CheckRightsAsync();
+    }
+
+    private async Task CheckRightsAsync()
+    {
+        report = null;
+        capabilityError = null;
+        onPremises = pending.Count(c => !c.PortalCanApply);
+        ready = 0;
+        blocked = 0;
+        if (pending.Count == 0 || !user.CanUseDelegatedTokens()) return;
+
+        checking = true;
+        StateHasChanged();
+        try
+        {
+            report = await Capabilities.CheckAsync(user, pendingRows, pendingDecisions, groups, CancellationToken.None);
+            ready = pending.Count(c => c.PortalCanApply && AccessChanges.CapabilityOf(c, report)?.CanRevoke == true);
+            blocked = pending.Count - ready - onPremises;
+        }
+        catch (Exception ex)
+        {
+            capabilityError = "Your rights could not be checked: " + ex.Message;
+        }
+        finally
+        {
+            checking = false;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        busy = true;
+        try
+        {
+            results = await RemediationSvc.ExecuteAsync(user, SnapshotId, CancellationToken.None);
+            confirm = false;
+            notice = null;
+            Notifier.Notify();
+            await LoadAsync();
+        }
+        catch (UserConsentRequiredException ex)
+        {
+            Consent.Handle(ex, $"/changes/{SnapshotId}");
+        }
+        catch (Exception ex)
+        {
+            // Rows that were already changed keep their status in the database; show the error instead of breaking the page.
+            notice = $"Apply stopped: {ex.GetType().Name}: {ex.Message}";
+            await LoadAsync();
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task CancelAsync(AccessChange c)
+    {
+        var upn = user.GetUpn();
+        foreach (var row in pendingRows.Where(r => c.RowIds.Contains(r.Id)))
+        {
+            await Snapshots.SetDecisionAsync(row.Id, ReviewerDecision.Pending, row.ReviewerComment, upn);
+        }
+        if (c.HasMemberDecision)
+        {
+            var decision = pendingDecisions.First(d => UserCapabilityChecker.MemberKey(d.GroupId, d.MemberId) == UserCapabilityChecker.MemberKey(c.GroupId!, c.MemberId!));
+            await Snapshots.SetMemberDecisionAsync(SnapshotId, decision.GroupId, decision.MemberId, decision.MemberDisplayName, decision.MemberUpn,
+                GroupMemberDecisionType.Pending, decision.Comment, upn);
+        }
+        notice = $"Cancelled: {c.ChangeText} – {c.Principal} / {c.Access}. The decision is Pending again.";
+        results = null;
+        confirm = false;
+        Notifier.Notify();
+        await LoadAsync();
+    }
+
+    private void GrantConsent()
+    {
+        if (report?.ConsentException is { } ex)
+        {
+            Consent.Handle(ex, $"/changes/{SnapshotId}");
+        }
+        else if (report?.ConsentScopes.Length > 0)
+        {
+            Consent.Handle(new UserConsentRequiredException(report.ConsentScopes, user.IsDeviceCodeLogin(), "Consent is needed."), $"/changes/{SnapshotId}");
+        }
+    }
+
+    private MarkupString CapabilityText(AccessChange c)
+    {
+        if (!c.PortalCanApply) return new MarkupString("<span class=\"text-muted\">Change it in on-premises AD</span>");
+        var capability = AccessChanges.CapabilityOf(c, report);
+        if (capability is null) return new MarkupString("<span class=\"text-muted\">-</span>");
+        var text = System.Net.WebUtility.HtmlEncode(capability.Reason);
+        return new MarkupString(capability.CanRevoke ? $"<span class=\"text-success\">✔ {text}</span>" : $"<span class=\"text-danger\">✖ {text}</span>");
+    }
+
+    /// <summary>"Revoked 2026-11-05 17:37 UTC: Role assignment deleted." -> "Role assignment deleted."</summary>
+    private static string ResultText(string? status)
+    {
+        if (string.IsNullOrEmpty(status)) return "";
+        var i = status.IndexOf("UTC: ", StringComparison.Ordinal);
+        return i >= 0 ? status[(i + 5)..] : status;
+    }
+}

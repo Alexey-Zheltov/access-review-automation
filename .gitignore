@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+TestResults/
+artifacts/
+.env
+certs/*
+!certs/README.md
+*.pfx
+*.pem
+*.key
+*.dump
+.docker-nocreds/

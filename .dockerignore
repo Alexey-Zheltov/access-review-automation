@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/*.user
+**/TestResults/
+.env
+.git/
+certs/
+deploy/
+scripts/
+*.md
+setup-sp.ps1

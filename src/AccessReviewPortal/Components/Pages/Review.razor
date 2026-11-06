@@ -1,0 +1,561 @@
+@page "/review"
+@page "/review/{SnapshotId:int}"
+@inject SnapshotService Snapshots
+@inject UserCapabilityChecker Capabilities
+@inject ConsentRedirector Consent
+@inject PendingChangesNotifier Notifier
+@inject NavigationManager Nav
+
+<PageTitle>Access Review</PageTitle>
+
+<h1 class="h4 mb-3">Access review &ndash; all Entra ID and Azure RBAC assignments</h1>
+
+@if (snapshots.Count == 0)
+{
+    <div class="alert alert-secondary">No completed snapshots yet. Run a live scan on the <a href="">Snapshots &amp; Scan</a> page first.</div>
+}
+else
+{
+    <div class="card mb-2">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-end filters">
+                <div class="col-xl-3 col-md-4">
+                    <label class="form-label">Snapshot</label>
+                    <select class="form-select form-select-sm" value="@SnapshotId" @onchange="OnSnapshotChangedAsync">
+                        @foreach (var s in snapshots)
+                        {
+                            <option value="@s.Id">#@s.Id @s.Label (@s.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm"))</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Scope Level</label>
+                    <select class="form-select form-select-sm" @bind="scopeLevel">
+                        <option value="">All</option>
+                        @foreach (var l in Enum.GetValues<ScopeLevel>())
+                        {
+                            <option value="@l">@DisplayText.Of(l)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Subscription</label>
+                    <select class="form-select form-select-sm" @bind="filter.SubscriptionId">
+                        <option value="">All</option>
+                        @foreach (var s in options.Subscriptions)
+                        {
+                            <option value="@s.Id">@s.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Role Name</label>
+                    <select class="form-select form-select-sm" @bind="filter.RoleName">
+                        <option value="">All</option>
+                        @foreach (var r in options.Roles)
+                        {
+                            <option value="@r">@r</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Assignment Type</label>
+                    <select class="form-select form-select-sm" @bind="filter.AssignmentFilter">
+                        @foreach (var a in ReviewFilter.AssignmentFilters)
+                        {
+                            <option value="@a">@a</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Usage Evidence</label>
+                    <select class="form-select form-select-sm" @bind="usage">
+                        <option value="">All</option>
+                        @foreach (var u in Enum.GetValues<UsageEvidenceStatus>())
+                        {
+                            <option value="@u">@u</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Defender CSPM (CIEM)</label>
+                    <select class="form-select form-select-sm" @bind="filter.Defender">
+                        <option value="All">All</option>
+                        <option value="Any">Any finding</option>
+                        @foreach (var d in Enum.GetValues<DefenderCspmStatus>().Where(d => d != DefenderCspmStatus.None))
+                        {
+                            <option value="@d">@DisplayText.Of(d)</option>
+                        }
+                        <option value="None">No finding</option>
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Recommendation</label>
+                    <select class="form-select form-select-sm" @bind="filter.Recommendation">
+                        <option value="All">All</option>
+                        <option value="Remove">Remove Recommended</option>
+                        <option value="Review">Review</option>
+                        <option value="NoAction">No Action</option>
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Reviewer Decision</label>
+                    <select class="form-select form-select-sm" @bind="filter.Decision">
+                        <option value="All">All</option>
+                        <option value="Pending">Pending</option>
+                        <option value="NoAction">Keep</option>
+                        <option value="Removed">Approve Removal</option>
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Principal Type</label>
+                    <select class="form-select form-select-sm" @bind="filter.PrincipalType">
+                        <option value="">All</option>
+                        @foreach (var p in options.PrincipalTypes)
+                        {
+                            <option value="@p">@p</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">Search</label>
+                    <input class="form-control form-control-sm" placeholder="name, UPN, scope, group" @bind="filter.Search" @onkeyup="OnSearchKeyAsync" />
+                </div>
+                <div class="col-auto">
+                    <div class="form-check mb-1">
+                        <input class="form-check-input" type="checkbox" id="newOnly" @bind="filter.OnlyNewSinceBaseline" />
+                        <label class="form-check-label small" for="newOnly">New since baseline</label>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-sm btn-primary" @onclick="ApplyAsync">Apply</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ResetFiltersAsync">Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <span class="me-2"><strong>@total</strong> rows</span>
+        @if (confirmBulk)
+        {
+            <span class="small">Accept recommendations for all @total filtered rows? (Remove &rarr; Approve Removal, No Action &rarr; Keep; "Review" rows are skipped)</span>
+            <button class="btn btn-sm btn-success" @onclick="BulkAcceptAsync">Yes, accept</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => confirmBulk = false">Cancel</button>
+        }
+        else
+        {
+            <button class="btn btn-sm btn-outline-success" disabled="@(total == 0)" @onclick="() => confirmBulk = true">Accept recommendations (filtered)</button>
+        }
+        @if (confirmReset)
+        {
+            <button class="btn btn-sm btn-warning" @onclick="ResetDecisionsAsync">Confirm reset of @total decisions</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => confirmReset = false">Cancel</button>
+        }
+        else
+        {
+            <button class="btn btn-sm btn-outline-secondary" disabled="@(total == 0)" @onclick="() => confirmReset = true">Reset decisions (filtered)</button>
+        }
+        <a class="btn btn-sm @(pendingHere > 0 ? "btn-danger" : "btn-outline-danger")" href="changes/@SnapshotId"
+           title="Apply the approved removals from the portal">Changes Pending@(pendingHere > 0 ? $" ({pendingHere})" : "") &rarr;</a>
+        <a class="btn btn-sm btn-success ms-auto" href="@ExportUrl(true)" download target="_top">Export Excel (filtered)</a>
+        <a class="btn btn-sm btn-outline-success" href="export/@SnapshotId/xlsx" download target="_top">Export Excel (all rows)</a>
+    </div>
+
+    @if (notice is not null)
+    {
+        <div class="alert alert-info py-1 small">@notice</div>
+    }
+    @if (capabilityNote is not null)
+    {
+        <div class="alert alert-light border py-1 small">
+            @capabilityNote
+            @if (capabilities?.ConsentScopes.Length > 0)
+            {
+                <button class="btn btn-sm btn-outline-primary ms-2" @onclick="GrantConsent">Grant consent</button>
+            }
+        </div>
+    }
+
+    <div class="table-responsive">
+        <table class="table table-sm table-hover review-table align-top">
+            <thead class="table-light">
+                <tr>
+                    <th>Principal</th>
+                    <th>Scope</th>
+                    <th>Role</th>
+                    <th>Assignment</th>
+                    <th>Usage evidence (@threshold d)</th>
+                    <th>Defender CSPM</th>
+                    <th>Self-review</th>
+                    <th>Recommendation</th>
+                    <th style="min-width: 290px">Reviewer decision</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in rows)
+                {
+                    var edit = Edit(r);
+                    <tr class="@(r.ReviewerDecision == ReviewerDecision.Removed ? "row-removed" : r.RecommendedAction == RecommendedAction.Remove ? "row-remove" : "")">
+                        <td>
+                            <div class="fw-semibold">@(r.PrincipalDisplayName ?? r.PrincipalId)</div>
+                            <div class="small text-muted">@(r.PrincipalUpn ?? r.PrincipalType)</div>
+                            @if (r.AssignedViaGroupName is not null)
+                            {
+                                <span class="badge text-bg-light border" title="Access is inherited through group membership">via group: @r.AssignedViaGroupName@(r.AssignedViaGroupOnPremises ? " (AD)" : "")</span>
+                            }
+                            @if (r.PrincipalType != "User")
+                            {
+                                <span class="badge text-bg-secondary">@r.PrincipalType</span>
+                            }
+                            @if (!r.PrincipalExists)
+                            {
+                                <span class="badge text-bg-danger">not found</span>
+                            }
+                            @if (r.IsNewSinceBaseline)
+                            {
+                                <span class="badge text-bg-info">new</span>
+                            }
+                        </td>
+                        <td>
+                            <span class="badge level-@r.ScopeLevel">@DisplayText.Of(r.ScopeLevel)</span>
+                            <div class="small" title="@r.ScopeId">@r.ScopeDisplayName</div>
+                            @if (r.ScopeLevel is ScopeLevel.ResourceGroup or ScopeLevel.Resource)
+                            {
+                                <div class="small text-muted">@r.SubscriptionName</div>
+                            }
+                        </td>
+                        <td>
+                            @r.RoleName
+                            @if (r.RoleHasWritePermissions)
+                            {
+                                <span class="badge text-bg-light border" title="The role can change resources or directory objects">write</span>
+                            }
+                        </td>
+                        <td>
+                            @DisplayText.Of(r.AssignmentType)
+                            <div class="small text-muted">@(r.EndDateTimeUtc is null ? "no end date" : "ends " + r.EndDateTimeUtc.Value.ToString("yyyy-MM-dd"))</div>
+                        </td>
+                        <td>
+                            <span class="badge usage-@r.UsageEvidenceStatus">@r.UsageEvidenceStatus</span>
+                            <div class="small text-muted">@(r.LastRoleUsedUtc is null ? "no activity found" : $"last {r.LastRoleUsedUtc:yyyy-MM-dd} ({r.DaysSinceLastActivity} d)")</div>
+                            <button class="btn btn-link btn-sm p-0" @onclick="() => Toggle(r.Id)">@(expanded.Contains(r.Id) ? "hide" : "details")</button>
+                        </td>
+                        <td>
+                            @if (r.DefenderCspmStatus == DefenderCspmStatus.None)
+                            {
+                                <span class="text-muted small">-</span>
+                            }
+                            else
+                            {
+                                @foreach (var f in (r.DefenderCspmFindings ?? r.DefenderCspmStatus.ToString()).Split(','))
+                                {
+                                    var status = Enum.TryParse<DefenderCspmStatus>(f, out var s) ? s : DefenderCspmStatus.None;
+                                    <span class="badge defender-@status me-1" title="@r.DefenderCspmDetails">@DisplayText.Of(status)</span>
+                                }
+                            }
+                        </td>
+                        <td>
+                            @if (r.NativeSelfReviewDecision == NativeReviewDecision.None)
+                            {
+                                <span class="text-muted small">-</span>
+                            }
+                            else
+                            {
+                                <span class="badge native-@r.NativeSelfReviewDecision" title="@r.NativeReviewDetails">@r.NativeSelfReviewDecision</span>
+                            }
+                        </td>
+                        <td>
+                            <span class="badge rec-@r.RecommendedAction">@DisplayText.Of(r.RecommendedAction)</span>
+                            <div class="small">@r.RecommendationReason</div>
+                        </td>
+                        <td>
+                            <div class="d-flex gap-1">
+                                <select class="form-select form-select-sm" value="@edit.Decision" @onchange="e => edit.Decision = Enum.Parse<ReviewerDecision>(e.Value?.ToString() ?? nameof(ReviewerDecision.Pending))">
+                                    <option value="@ReviewerDecision.Pending">Pending</option>
+                                    <option value="@ReviewerDecision.NoAction">Keep</option>
+                                    <option value="@ReviewerDecision.Removed">Approve Removal</option>
+                                </select>
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => SaveAsync(r)">Save</button>
+                                @if (r.RecommendedAction != RecommendedAction.Review)
+                                {
+                                    <button class="btn btn-sm btn-outline-success" title="Accept Recommendation" @onclick="() => AcceptOneAsync(r)">Accept</button>
+                                }
+                            </div>
+                            <input class="form-control form-control-sm mt-1" placeholder="Comment" value="@edit.Comment" @onchange="e => edit.Comment = e.Value?.ToString()" />
+                            @if (r.ReviewerDecision != ReviewerDecision.Pending)
+                            {
+                                <div class="small text-muted">@DisplayText.ReviewLabel(r.ReviewerDecision) by @(r.ReviewedByUpn ?? "-") @r.ReviewedAtUtc?.ToString("yyyy-MM-dd HH:mm")</div>
+                            }
+                            @if (r.ReviewerDecision == ReviewerDecision.Removed || r.RecommendedAction == RecommendedAction.Remove)
+                            {
+                                @if (capabilities?.Rows.TryGetValue(r.Id, out var cap) == true)
+                                {
+                                    <div class="small @(cap.CanRevoke ? "text-success" : "text-muted")" title="@cap.Reason">
+                                        @(cap.CanRevoke ? "✔ You can revoke this" : "✖ " + cap.Reason)
+                                    </div>
+                                }
+                            }
+                            @if (r.RemediationStatus is not null)
+                            {
+                                <div class="small">@r.RemediationStatus @(r.RemediatedByUpn is null ? "" : $"(by {r.RemediatedByUpn})")</div>
+                            }
+                        </td>
+                    </tr>
+                    @if (expanded.Contains(r.Id))
+                    {
+                        <tr class="details-row">
+                            <td colspan="9">
+                                <dl class="row small mb-0">
+                                    <dt class="col-md-2">Usage details</dt><dd class="col-md-10">@r.UsageEvidenceDetails</dd>
+                                    <dt class="col-md-2">PIM activation</dt><dd class="col-md-10">@(r.PimActivationDetails ?? "-")</dd>
+                                    <dt class="col-md-2">Last write</dt><dd class="col-md-10">@(r.LastWriteEvidenceUtc is null ? "-" : $"{r.LastWriteOperation} on {r.LastWriteEvidenceUtc:yyyy-MM-dd HH:mm} UTC [{r.WriteEvidenceSource}]")</dd>
+                                    <dt class="col-md-2">Last sign-in</dt><dd class="col-md-10">@(r.LastSignInUtc is null ? "-" : $"{r.SignInSource} on {r.LastSignInUtc:yyyy-MM-dd HH:mm} UTC")</dd>
+                                    <dt class="col-md-2">Defender CSPM</dt><dd class="col-md-10">@(r.DefenderCspmDetails ?? "-")</dd>
+                                    <dt class="col-md-2">Justification</dt><dd class="col-md-10">@(r.Justification ?? "-")</dd>
+                                    <dt class="col-md-2">Native review</dt><dd class="col-md-10">@(r.NativeReviewDetails ?? "-")</dd>
+                                    <dt class="col-md-2">Validity</dt><dd class="col-md-10">@(r.StartDateTimeUtc?.ToString("yyyy-MM-dd") ?? "-") &rarr; @(r.EndDateTimeUtc?.ToString("yyyy-MM-dd") ?? "permanent")</dd>
+                                    <dt class="col-md-2">Scope id</dt><dd class="col-md-10 font-monospace">@r.ScopeId</dd>
+                                    <dt class="col-md-2">Assignment id</dt><dd class="col-md-10 font-monospace">@r.SourceAssignmentId</dd>
+                                    <dt class="col-md-2">Principal id</dt><dd class="col-md-10 font-monospace">@r.PrincipalId @(r.AssignedViaGroupId is null ? "" : $"(group {r.AssignedViaGroupId})")</dd>
+                                </dl>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex align-items-center gap-2 mb-4">
+        <button class="btn btn-sm btn-outline-secondary" disabled="@(page == 0)" @onclick="() => GoToAsync(page - 1)">Previous</button>
+        <span class="small">Page @(page + 1) of @Math.Max(1, (int)Math.Ceiling(total / (double)PageSize))</span>
+        <button class="btn btn-sm btn-outline-secondary" disabled="@((page + 1) * PageSize >= total)" @onclick="() => GoToAsync(page + 1)">Next</button>
+    </div>
+}
+
+@code {
+    private const int PageSize = 50;
+
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+    [Parameter] public int SnapshotId { get; set; }
+    [SupplyParameterFromQuery(Name = "q")] public string? Query { get; set; }
+
+    // Filters set by links from the KPI dashboard.
+    [SupplyParameterFromQuery(Name = "usage")] public string? UsageQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "ptype")] public string? PrincipalTypeQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "dec")] public string? DecisionQuery { get; set; }
+
+    private ClaimsPrincipal user = new();
+    private List<ScanSnapshot> snapshots = [];
+    private FilterOptions options = new();
+    private ReviewFilter filter = new();
+    private string scopeLevel = "";
+    private string usage = "";
+    private List<RoleAssignmentSnapshot> rows = [];
+    private int total;
+    private int page;
+    private int threshold = 90;
+    private readonly HashSet<long> expanded = [];
+    private readonly Dictionary<long, EditState> edits = [];
+    private bool confirmBulk;
+    private bool confirmReset;
+    private string? notice;
+    private CapabilityReport? capabilities;
+    private string? capabilityNote;
+    private int capabilityVersion;
+    private int pendingHere;
+
+    private sealed class EditState
+    {
+        public ReviewerDecision Decision { get; set; }
+        public string? Comment { get; set; }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        user = (await AuthState).User;
+        snapshots = (await Snapshots.GetSnapshotsAsync()).Where(s => s.Status == ScanStatus.Completed).ToList();
+        if (snapshots.Count == 0) return;
+        if (SnapshotId == 0 || snapshots.All(s => s.Id != SnapshotId))
+        {
+            SnapshotId = snapshots[0].Id;
+        }
+        if (!string.IsNullOrWhiteSpace(Query))
+        {
+            filter.Search = Query;
+        }
+        if (Enum.TryParse<UsageEvidenceStatus>(UsageQuery, out var usageFromQuery))
+        {
+            usage = usageFromQuery.ToString();
+        }
+        if (!string.IsNullOrWhiteSpace(PrincipalTypeQuery))
+        {
+            filter.PrincipalType = PrincipalTypeQuery;
+        }
+        if (DecisionQuery is "Pending" or "NoAction" or "Removed")
+        {
+            filter.Decision = DecisionQuery;
+        }
+        await LoadOptionsAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadOptionsAsync()
+    {
+        options = await Snapshots.GetFilterOptionsAsync(SnapshotId);
+        threshold = snapshots.FirstOrDefault(s => s.Id == SnapshotId)?.InactivityThresholdDays ?? 90;
+    }
+
+    private ReviewFilter CurrentFilter()
+    {
+        filter.ScopeLevel = Enum.TryParse<ScopeLevel>(scopeLevel, out var l) ? l : null;
+        filter.Usage = Enum.TryParse<UsageEvidenceStatus>(usage, out var u) ? u : null;
+        return filter;
+    }
+
+    private async Task LoadAsync()
+    {
+        (rows, total) = await Snapshots.QueryAsync(SnapshotId, CurrentFilter(), page, PageSize);
+        pendingHere = (await Snapshots.GetPendingCountsAsync()).GetValueOrDefault(SnapshotId);
+        edits.Clear();
+        _ = CheckCapabilitiesAsync();
+    }
+
+    /// <summary>Checks, with the reviewer's own token, whether he can revoke the rows on this page (runs after the table is shown).</summary>
+    private async Task CheckCapabilitiesAsync()
+    {
+        var version = ++capabilityVersion;
+        var candidates = rows.Where(r => r.ReviewerDecision == ReviewerDecision.Removed || r.RecommendedAction == RecommendedAction.Remove).ToList();
+        if (candidates.Count == 0)
+        {
+            capabilities = null;
+            capabilityNote = null;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+        try
+        {
+            var groups = await Snapshots.GetGroupsAsync(SnapshotId);
+            var report = await Capabilities.CheckAsync(user, candidates, [], groups, CancellationToken.None);
+            if (version != capabilityVersion) return;
+            capabilities = report;
+            var can = report.Rows.Values.Count(c => c.CanRevoke);
+            capabilityNote = user.CanUseDelegatedTokens()
+                ? $"Your rights ({report.UserUpn}): you can revoke {can} of {report.Rows.Count} removal candidate(s) on this page." +
+                  (report.UserEntraRoles.Count > 0 ? $" Active Entra roles: {string.Join(", ", report.UserEntraRoles)}." : "")
+                : "Access key mode: you can record decisions; revoke needs Microsoft Entra ID sign-in.";
+        }
+        catch (Exception ex)
+        {
+            capabilityNote = $"Your rights could not be checked: {ex.Message}";
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void GrantConsent()
+    {
+        if (capabilities?.ConsentException is { } ex)
+        {
+            Consent.Handle(ex);
+        }
+        else if (capabilities?.ConsentScopes.Length > 0)
+        {
+            Consent.Handle(new UserConsentRequiredException(capabilities.ConsentScopes, user.IsDeviceCodeLogin(), "Consent is needed."));
+        }
+    }
+
+    private async Task OnSnapshotChangedAsync(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var id))
+        {
+            Nav.NavigateTo($"review/{id}");
+            SnapshotId = id;
+            page = 0;
+            await LoadOptionsAsync();
+            await LoadAsync();
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        page = 0;
+        notice = null;
+        await LoadAsync();
+    }
+
+    private async Task OnSearchKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ApplyAsync();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        filter = new ReviewFilter();
+        scopeLevel = "";
+        usage = "";
+        await ApplyAsync();
+    }
+
+    private async Task GoToAsync(int newPage)
+    {
+        page = Math.Max(0, newPage);
+        await LoadAsync();
+    }
+
+    private EditState Edit(RoleAssignmentSnapshot r)
+    {
+        if (!edits.TryGetValue(r.Id, out var state))
+        {
+            state = new EditState { Decision = r.ReviewerDecision, Comment = r.ReviewerComment };
+            edits[r.Id] = state;
+        }
+        return state;
+    }
+
+    private void Toggle(long id)
+    {
+        if (!expanded.Remove(id)) expanded.Add(id);
+    }
+
+    private async Task SaveAsync(RoleAssignmentSnapshot r)
+    {
+        var e = Edit(r);
+        await Snapshots.SetDecisionAsync(r.Id, e.Decision, e.Comment, user.GetUpn());
+        notice = $"Saved: {r.PrincipalDisplayName} / {r.RoleName} -> {DisplayText.ReviewLabel(e.Decision)}";
+        Notifier.Notify();
+        await LoadAsync();
+    }
+
+    private async Task AcceptOneAsync(RoleAssignmentSnapshot r)
+    {
+        await Snapshots.AcceptRecommendationsAsync(SnapshotId, new ReviewFilter(), user.GetUpn(), new[] { r.Id });
+        notice = $"Accepted: {r.PrincipalDisplayName} / {r.RoleName} -> {(r.RecommendedAction == RecommendedAction.Remove ? "Approve Removal" : "Keep")}";
+        Notifier.Notify();
+        await LoadAsync();
+    }
+
+    private async Task BulkAcceptAsync()
+    {
+        confirmBulk = false;
+        var count = await Snapshots.AcceptRecommendationsAsync(SnapshotId, CurrentFilter(), user.GetUpn());
+        notice = $"Recommendations accepted for {count} rows.";
+        Notifier.Notify();
+        await LoadAsync();
+    }
+
+    private async Task ResetDecisionsAsync()
+    {
+        confirmReset = false;
+        var count = await Snapshots.ResetDecisionsAsync(SnapshotId, CurrentFilter());
+        notice = $"Decisions reset to Pending for {count} rows.";
+        Notifier.Notify();
+        await LoadAsync();
+    }
+
+    private string ExportUrl(bool filtered)
+    {
+        var query = filtered ? AccessReviewPortal.Endpoints.PortalEndpoints.ToQuery(CurrentFilter()) : "";
+        return $"export/{SnapshotId}/xlsx" + (query.Length > 0 ? "?" + query : "");
+    }
+}

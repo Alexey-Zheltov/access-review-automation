@@ -1,0 +1,45 @@
+@* Grafana-style stat panel: a large value in its threshold colour with a sparkline at the bottom. *@
+<div class="gf-panel gf-stat">
+    <div class="gf-panel-title">
+        @Title
+        @if (Description is not null)
+        {
+            <span class="gf-info" title="@Description">i</span>
+        }
+    </div>
+    <div class="gf-stat-body">
+        <div class="gf-stat-value" style="color: @Color">
+            @if (Href is null)
+            {
+                @Value
+            }
+            else
+            {
+                <a href="@Href">@Value</a>
+            }
+            @if (Unit is not null)
+            {
+                <span class="gf-stat-unit">@Unit</span>
+            }
+        </div>
+        @ChildContent
+    </div>
+    @if (Spark is { Count: > 0 })
+    {
+        <svg class="gf-stat-spark" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
+            <path d="@ChartMath.Sparkline(Spark, 100, 40, true)" fill="@Color" fill-opacity="0.16" />
+            <path d="@ChartMath.Sparkline(Spark, 100, 40, false)" fill="none" stroke="@Color" stroke-width="1.5" vector-effect="non-scaling-stroke" />
+        </svg>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public string? Unit { get; set; }
+    [Parameter] public string Color { get; set; } = GfColors.Text;
+    [Parameter] public string? Href { get; set; }
+    [Parameter] public IReadOnlyList<double>? Spark { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

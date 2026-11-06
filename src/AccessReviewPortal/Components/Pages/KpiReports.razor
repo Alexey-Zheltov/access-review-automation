@@ -1,0 +1,495 @@
+@page "/reports"
+@inject KpiReportService Reports
+@inject NavigationManager Nav
+@inject TimeProvider Time
+
+<PageTitle>KPI &amp; Reports</PageTitle>
+
+<div class="gf-dashboard">
+    <div class="gf-header">
+        <div class="gf-title">
+            <svg class="gf-title-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" /></svg>
+            Access review KPIs
+        </div>
+        <div class="gf-toolbar d-print-none">
+            <div class="gf-timepicker" title="Period (UTC)">
+                <svg class="gf-clock" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /><path d="M8 4.2V8l2.6 1.6" /></svg>
+                <select id="kpi-preset" class="gf-input" value="@preset" @onchange="OnPresetChanged" aria-label="Period">
+                    @foreach (var p in ReportPeriod.Presets)
+                    {
+                        <option value="@p.Key">@p.Name</option>
+                    }
+                    <option value="@ReportPeriod.Custom">Custom dates</option>
+                </select>
+            </div>
+            <input id="kpi-from" type="date" class="gf-input" value="@ReportPeriod.Iso(period.From)" @onchange="e => OnDateChanged(e, true)" aria-label="From (UTC)" />
+            <span class="gf-muted">to</span>
+            <input id="kpi-to" type="date" class="gf-input" value="@ReportPeriod.Iso(period.To)" @onchange="e => OnDateChanged(e, false)" aria-label="To (UTC)" />
+            <a class="gf-btn" href="reports/xlsx?@period.Query" download target="_top">Excel report</a>
+            <button type="button" class="gf-btn" onclick="window.print()">Print / PDF</button>
+        </div>
+    </div>
+
+    @if (error is not null)
+    {
+        <div class="gf-panel gf-error">The report could not be built: @error</div>
+    }
+    else if (report is null)
+    {
+        <div class="gf-info-line">Loading&hellip;</div>
+    }
+    else
+    {
+        var r = report;
+        var end = r.End;
+        <div class="gf-info-line">
+            @InfoLine(r)
+            @if (loading)
+            {
+                <span class="ms-2">Updating&hellip;</span>
+            }
+        </div>
+
+        <div class="row g-2 mb-2">
+            <div class="col-6 col-md-4 col-xl-2">
+                @if (end is null)
+                {
+                    <GfStat Title="Users with unused roles" Value="–">
+                        <div class="gf-note">No snapshot up to the end of the period.</div>
+                    </GfStat>
+                }
+                else
+                {
+                    <GfStat Title="Users with unused roles" Value="@end.UsersWithUnusedRoles.ToString()" Unit="@($"of {end.UsersWithRoles}")"
+                            Color="@ChartMath.ColorFor(end.UnusedPercent, ChartMath.LowIsGood)" Href="@UnusedLink(end)"
+                            Spark="@(TrendSnapshots(r).Select(s => (double)s.UsersWithUnusedRoles).ToList())"
+                            Description="Users with at least one role assignment without use in the inactivity threshold (last snapshot of the period). The line shows every snapshot in the period.">
+                        @if (r.Start is { } start)
+                        {
+                            <div class="gf-note">
+                                Start of period: @start.UsersWithUnusedRoles (#@start.Snapshot.Id)
+                                <span class="@DeltaClass(end.UsersWithUnusedRoles, start.UsersWithUnusedRoles)">@DeltaText(end.UsersWithUnusedRoles, start.UsersWithUnusedRoles)</span>
+                            </div>
+                        }
+                        <div class="gf-note">Service principals: @end.ServicePrincipalsWithUnusedRoles of @end.ServicePrincipalsWithRoles</div>
+                    </GfStat>
+                }
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <GfGauge Title="Unused share" Percent="@(end?.UnusedPercent ?? 0)" Thresholds="@ChartMath.LowIsGood"
+                         Label="@(end is null ? "no snapshot" : $"{end.UsersWithUnusedRoles} of {end.UsersWithRoles} users")"
+                         Description="Share of users with role assignments who have at least one unused role. Green below 10 %, yellow below 30 %, red from 30 %." />
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <GfStat Title="Users cleaned up" Value="@r.UsersCleanedUp.ToString()" Color="@(r.UsersCleanedUp > 0 ? GfColors.Green : GfColors.Text)"
+                        Spark="@(r.Activity.Select(a => (double)a.UsersCleanedUpToDate).ToList())"
+                        Description="Users with at least one change applied in the period (Apply on Changes Pending). The line shows the running total.">
+                    <div class="gf-note">@N(r.ChangesApplied, "change") applied: @N(r.RoleAssignmentsRemoved, "role assignment"), @N(r.GroupMembershipsRemoved, "group membership")</div>
+                    @if (r.ServicePrincipalsCleanedUp > 0)
+                    {
+                        <div class="gf-note">Service principals: @r.ServicePrincipalsCleanedUp</div>
+                    }
+                </GfStat>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <GfStat Title="Exceptions" Value="@r.UsersWithExceptions.ToString()" Unit="@Word(r.UsersWithExceptions, "user")" Color="@ExceptionColor(r)"
+                        Spark="@(r.Activity.Select(a => (double)a.ExceptionsToDate).ToList())"
+                        Description="Keep or Keep in Group on a role that was not used, or on a row with a Remove recommendation (leaver, mover, denied in self-review).">
+                    <div class="gf-note">@N(r.Exceptions.Count, "item") kept although unused or flagged for removal</div>
+                    @if (r.ExceptionsWithoutJustification > 0)
+                    {
+                        <div class="gf-note gf-bad">@r.ExceptionsWithoutJustification without justification</div>
+                    }
+                </GfStat>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <GfStat Title="Waiting for Apply" Value="@r.ChangesWaitingForApply.ToString()" Unit="@Word(r.ChangesWaitingForApply, "change")"
+                        Color="@(r.ChangesWaitingForApply > 0 ? GfColors.Orange : GfColors.Green)" Href="changes"
+                        Description="Changes approved in the period and not applied yet. Open Changes Pending to apply them.">
+                    <div class="gf-note">Approved in the period, not applied yet</div>
+                </GfStat>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <GfGauge Title="Review progress" Percent="@(end?.ReviewedPercent ?? 0)" Thresholds="@ChartMath.HighIsGood"
+                         Label="@(end is null ? "no snapshot" : $"{end.RowsReviewed} of {end.RowsToReview} rows decided")"
+                         Description="Rows with a Remove or Review recommendation that have a reviewer decision, in the last snapshot of the period." />
+            </div>
+        </div>
+
+        <div class="row g-2 mb-2">
+            <div class="col-lg-8">
+                <GfChart Title="Unused access per snapshot" Points="@TrendPoints(r)" Lines="@TrendLines(r)" EmptyText="No snapshot in the period." Width="580"
+                         Description="Every completed snapshot in the period (and the last one before it). Hover a point for the values." />
+            </div>
+            <div class="col-lg-4">
+                <GfDonut Title="@(end is null ? "Role assignments of users by usage" : $"Role assignments of users by usage (snapshot #{end.Snapshot.Id})")"
+                         Slices="@UsageSlices(end)" CenterValue="@(end?.UserAssignments.ToString())" CenterLabel="assignments"
+                         EmptyText="No snapshot up to the end of the period."
+                         Description="Usage evidence of the role assignments of users. Used: a write operation or a PIM activation in the inactivity threshold. Sign-in only: sign-ins, no writes. Unused: no activity found." />
+            </div>
+        </div>
+
+        <div class="row g-2 mb-2">
+            <div class="col-lg-5">
+                <GfBarGauge Title="Users with unused roles by department" Items="@DepartmentItems(r)" EmptyText="No users with role assignments."
+                            Description="Department from Entra ID at the time of the scan (last snapshot of the period). Cleaned up and exceptions use the department in the snapshot of the decision." />
+            </div>
+            <div class="col-lg-7">
+                <GfChart Title="@($"Review activity per {r.ActivityUnit}")" Points="@ActivityPoints(r)" Bars="@ActivityBars(r)" Lines="@ActivityLines(r)"
+                         LinesShowTotal="true" MaxLabels="8" Width="560"
+                         Description="Reviewer decisions (columns) and changes applied with Apply (line) from the start of the period to today." />
+            </div>
+        </div>
+
+        <div class="gf-panel mb-2">
+            <div class="gf-panel-title">Reviewers <span class="gf-note ms-auto">@N(r.Decisions, "decision") in the period</span></div>
+            @if (r.Reviewers.Count == 0)
+            {
+                <div class="gf-empty">No reviewer decisions or applied changes in the period.</div>
+            }
+            else
+            {
+                var maxDecisions = Math.Max(1, r.Reviewers.Max(x => x.Decisions));
+                <div class="table-responsive">
+                    <table class="gf-table">
+                        <thead>
+                            <tr>
+                                <th>Reviewer</th>
+                                <th>Decisions</th>
+                                <th class="num">Approve Removal</th>
+                                <th class="num">Keep</th>
+                                <th class="num">Exceptions</th>
+                                <th class="num">Users approved for removal</th>
+                                <th class="num">Users cleaned up</th>
+                                <th class="num">Changes applied</th>
+                                <th>Last activity (UTC)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var rv in r.Reviewers)
+                            {
+                                <tr>
+                                    <td>@rv.Reviewer</td>
+                                    <td class="text-nowrap">
+                                        <span class="gf-minibar" title="@($"Approve Removal {rv.ApprovedRemoval}, Keep {rv.Kept - rv.Exceptions}, Exceptions {rv.Exceptions}")">
+                                            <span style="width: @Share(rv.ApprovedRemoval, maxDecisions)%; background: @GfColors.Orange"></span>
+                                            <span style="width: @Share(Math.Max(0, rv.Kept - rv.Exceptions), maxDecisions)%; background: @GfColors.Blue"></span>
+                                            <span style="width: @Share(Math.Min(rv.Exceptions, rv.Kept), maxDecisions)%; background: @GfColors.Yellow"></span>
+                                        </span>
+                                        @rv.Decisions
+                                    </td>
+                                    <td class="num">@rv.ApprovedRemoval</td>
+                                    <td class="num">@rv.Kept</td>
+                                    <td class="num">@rv.Exceptions</td>
+                                    <td class="num">@rv.UsersApprovedForRemoval</td>
+                                    <td class="num">
+                                        <span class="gf-pill" style="@(rv.UsersCleanedUp > 0 ? $"background: {GfColors.Green}26; color: {GfColors.Green}" : "")">@rv.UsersCleanedUp</span>
+                                    </td>
+                                    <td class="num">@rv.ChangesApplied</td>
+                                    <td class="text-nowrap">@rv.LastActivityUtc?.ToString("yyyy-MM-dd HH:mm")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="gf-note mt-2">
+                    "Users cleaned up" and "Changes applied" are counted for the person who pressed Apply on Changes Pending.
+                    @if (r.Reviewers.Any(x => x.Reviewer == KpiCalculator.NotRecorded))
+                    {
+                        <span>@KpiCalculator.NotRecorded: the decision or change was saved without a reviewer name (first version of the POC).</span>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="gf-panel mb-2">
+            <div class="gf-panel-title">Exceptions: kept although unused or recommended for removal <span class="gf-note ms-auto">@N(r.Exceptions.Count, "item")</span></div>
+            @if (r.Exceptions.Count == 0)
+            {
+                <div class="gf-empty">
+                    No exceptions in the period. An exception is a Keep decision on a role without use in the inactivity threshold,
+                    or on a row with a Remove recommendation.
+                </div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="gf-table">
+                        <thead>
+                            <tr><th>User</th><th>Department</th><th>Access</th><th>Usage</th><th>Recommendation</th><th>Kept by</th><th>Decided (UTC)</th><th>Justification</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var f in r.Exceptions)
+                            {
+                                <tr>
+                                    <td>
+                                        <a href="@ItemLink(f)">@(f.DisplayName ?? f.PrincipalId)</a>
+                                        <div class="gf-note">@PrincipalNote(f)</div>
+                                    </td>
+                                    <td>@f.Department</td>
+                                    <td>@f.Access</td>
+                                    <td>
+                                        <span class="badge usage-@f.Usage">@f.Usage</span>
+                                        <div class="gf-note">@(f.LastUsedUtc is { } used ? "last " + used.ToString("yyyy-MM-dd") : "no activity found")</div>
+                                    </td>
+                                    <td>
+                                        <span class="badge rec-@f.Recommendation">@DisplayText.Of(f.Recommendation)</span>
+                                        <div class="gf-note">@f.Reason</div>
+                                    </td>
+                                    <td class="gf-note">@(f.ReviewedBy ?? KpiCalculator.NotRecorded)</td>
+                                    <td class="text-nowrap">@f.ReviewedAtUtc?.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td>
+                                        @if (string.IsNullOrWhiteSpace(f.Comment))
+                                        {
+                                            <span class="badge text-bg-warning">No justification</span>
+                                        }
+                                        else
+                                        {
+                                            @f.Comment
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <div class="gf-panel mb-2">
+            <div class="gf-panel-title">Access removed in the period <span class="gf-note ms-auto">@N(r.Removals.Count, "change")</span></div>
+            @if (r.Removals.Count == 0)
+            {
+                <div class="gf-empty">No changes were applied in the period.</div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="gf-table">
+                        <thead>
+                            <tr><th>User</th><th>Department</th><th>Access removed</th><th>Approved by</th><th>Applied by</th><th>Applied (UTC)</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var f in r.Removals.Take(MaxRows))
+                            {
+                                <tr>
+                                    <td>@(f.DisplayName ?? f.PrincipalId)<div class="gf-note">@PrincipalNote(f)</div></td>
+                                    <td>@f.Department</td>
+                                    <td>@f.ChangeText</td>
+                                    <td class="gf-note">@(f.ReviewedBy ?? KpiCalculator.NotRecorded)</td>
+                                    <td class="gf-note">@(f.AppliedBy ?? KpiCalculator.NotRecorded)</td>
+                                    <td class="text-nowrap">@f.AppliedAtUtc?.ToString("yyyy-MM-dd HH:mm")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (r.Removals.Count > MaxRows)
+                {
+                    <div class="gf-note mt-2">The first @MaxRows changes are shown. The Excel report has all of them.</div>
+                }
+            }
+        </div>
+
+        <details class="gf-panel mb-2">
+            <summary class="gf-panel-title">Snapshot details (@N(r.Snapshots.Count, "snapshot") in the period)</summary>
+            @if (r.Snapshots.Count == 0)
+            {
+                <div class="gf-empty">No scan in the period.</div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="gf-table">
+                        <thead>
+                            <tr>
+                                <th>Snapshot</th><th>Scanned (UTC)</th><th class="num">Users with roles</th><th class="num">Users with unused roles</th>
+                                <th class="num">Unused user assignments</th><th class="num">Service principals with unused roles</th><th>Review progress</th>
+                                <th class="num">Changes applied</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in r.Snapshots)
+                            {
+                                <tr>
+                                    <td><a href="review/@s.Snapshot.Id">#@s.Snapshot.Id</a> @s.Snapshot.Label</td>
+                                    <td class="text-nowrap">@s.Snapshot.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                                    <td class="num">@s.UsersWithRoles</td>
+                                    <td class="num">@s.UsersWithUnusedRoles (@s.UnusedPercent%)</td>
+                                    <td class="num">@s.UnusedUserAssignments</td>
+                                    <td class="num">@s.ServicePrincipalsWithUnusedRoles of @s.ServicePrincipalsWithRoles</td>
+                                    <td class="text-nowrap">@s.RowsReviewed of @s.RowsToReview (@s.ReviewedPercent%)</td>
+                                    <td class="num">@s.ChangesApplied</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </details>
+    }
+</div>
+
+@code {
+    private const int MaxRows = 200;
+
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+    [SupplyParameterFromQuery(Name = "from")] public string? FromQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] public string? ToQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "preset")] public string? PresetQuery { get; set; }
+
+    private ReportPeriod period = ReportPeriod.FromPreset(null, DateOnly.FromDateTime(DateTime.UtcNow));
+    private string preset = ReportPeriod.Presets[0].Key;
+    private KpiReport? report;
+    private string? error;
+    private bool loading;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var today = DateOnly.FromDateTime(Time.GetUtcNow().UtcDateTime);
+        var known = ReportPeriod.Presets.Any(p => p.Key == PresetQuery);
+        if (ReportPeriod.TryParseDate(FromQuery, out _) && ReportPeriod.TryParseDate(ToQuery, out _))
+        {
+            period = ReportPeriod.Parse(FromQuery, ToQuery, today);
+            preset = known && ReportPeriod.FromPreset(PresetQuery, today) == period ? PresetQuery! : ReportPeriod.Custom;
+        }
+        else
+        {
+            preset = known ? PresetQuery! : ReportPeriod.Presets[0].Key;
+            period = ReportPeriod.FromPreset(preset, today);
+        }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            var user = (await AuthState).User;
+            report = await Reports.BuildAsync(period, user.GetUpn());
+            error = null;
+        }
+        catch (Exception ex)
+        {
+            // A failed query must not end the Blazor circuit; show the reason on the page.
+            error = ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void OnPresetChanged(ChangeEventArgs e)
+    {
+        var key = e.Value?.ToString();
+        Nav.NavigateTo(key == ReportPeriod.Custom ? $"reports?{period.Query}" : $"reports?preset={Uri.EscapeDataString(key ?? "")}");
+    }
+
+    private void OnDateChanged(ChangeEventArgs e, bool isFrom)
+    {
+        if (!ReportPeriod.TryParseDate(e.Value?.ToString(), out var date)) return;
+        var changed = isFrom ? period with { From = date } : period with { To = date };
+        if (changed.From > changed.To) changed = new ReportPeriod(changed.To, changed.From);
+        Nav.NavigateTo($"reports?{changed.Query}");
+    }
+
+    // ------------------------------------------------------------------ chart data
+
+    /// <summary>Snapshots for the trend: the last one before the period (as the start value) and all in the period.</summary>
+    private static List<SnapshotKpi> TrendSnapshots(KpiReport r)
+    {
+        var list = new List<SnapshotKpi>();
+        if (r.Start is { } start && !r.Period.Contains(start.Snapshot.CreatedAtUtc)) list.Add(start);
+        list.AddRange(r.Snapshots);
+        return list;
+    }
+
+    private static List<ChartPoint> TrendPoints(KpiReport r) => TrendSnapshots(r)
+        .Select(s => new ChartPoint($"#{s.Snapshot.Id}", s.Snapshot.CreatedAtUtc.ToString("MM-dd"), s.Snapshot.Text))
+        .ToList();
+
+    private static List<ChartSeries> TrendLines(KpiReport r)
+    {
+        var snapshots = TrendSnapshots(r);
+        return
+        [
+            new("Users with roles", GfColors.Blue, snapshots.Select(s => (double)s.UsersWithRoles).ToList(), Dashed: true),
+            new("Unused user assignments", GfColors.Orange, snapshots.Select(s => (double)s.UnusedUserAssignments).ToList()),
+            new("Users with unused roles", GfColors.Red, snapshots.Select(s => (double)s.UsersWithUnusedRoles).ToList(), Area: true)
+        ];
+    }
+
+    private static List<DonutSlice> UsageSlices(SnapshotKpi? s) => s is null ? [] :
+    [
+        new("Used", s.UserAssignmentsUsed, GfColors.Green),
+        new("Sign-in only", s.UserAssignmentsSignInOnly, GfColors.Yellow),
+        new("Unused", s.UnusedUserAssignments, GfColors.Red)
+    ];
+
+    private static List<BarGaugeItem> DepartmentItems(KpiReport r) => r.Departments
+        .Select(d => new BarGaugeItem(
+            d.Department,
+            d.UsersWithUnusedRoles,
+            d.UsersWithRoles,
+            ChartMath.ColorFor(d.UnusedPercent, ChartMath.LowIsGood),
+            $"{d.UsersWithUnusedRoles} / {d.UsersWithRoles}",
+            $"{d.UnusedPercent}% unused"
+            + (d.UsersWithUnusedRolesAtStart is int start ? $" · start {start}" : "")
+            + $" · cleaned {d.UsersCleanedUp} · exceptions {d.UsersWithExceptions}"))
+        .ToList();
+
+    private static List<ChartPoint> ActivityPoints(KpiReport r) => r.Activity
+        .Select(a => r.ActivityUnit switch
+        {
+            "month" => new ChartPoint(a.Start.ToString("yyyy-MM"), null, $"{ReportPeriod.Iso(a.Start)} to {ReportPeriod.Iso(a.End)}"),
+            "week" => new ChartPoint(a.Start.ToString("MM-dd"), null, $"Week {ReportPeriod.Iso(a.Start)} to {ReportPeriod.Iso(a.End)}"),
+            _ => new ChartPoint(a.Start.ToString("MM-dd"), null, ReportPeriod.Iso(a.Start))
+        })
+        .ToList();
+
+    private static List<ChartSeries> ActivityBars(KpiReport r) =>
+    [
+        new("Approve Removal", GfColors.Orange, r.Activity.Select(a => (double)a.ApprovedRemoval).ToList()),
+        new("Keep", GfColors.Blue, r.Activity.Select(a => (double)Math.Max(0, a.Kept - a.Exceptions)).ToList()),
+        new("Exception (kept although unused)", GfColors.Yellow, r.Activity.Select(a => (double)a.Exceptions).ToList())
+    ];
+
+    private static List<ChartSeries> ActivityLines(KpiReport r) =>
+        [new("Changes applied", GfColors.Green, r.Activity.Select(a => (double)a.ChangesApplied).ToList())];
+
+    // ------------------------------------------------------------------ text helpers
+
+    private static string InfoLine(KpiReport r)
+    {
+        var parts = new List<string> { $"Period {r.Period} (UTC)." };
+        if (r.End is { } end)
+        {
+            parts.Add($"State numbers from snapshot {end.Snapshot.Text}, inactivity threshold {end.Snapshot.ThresholdDays} days.");
+        }
+        parts.Add($"Generated {r.GeneratedAtUtc:yyyy-MM-dd HH:mm} UTC" + (string.IsNullOrEmpty(r.GeneratedBy) ? "." : $" by {r.GeneratedBy}."));
+        return string.Join(" ", parts);
+    }
+
+    private static string ExceptionColor(KpiReport r) =>
+        r.ExceptionsWithoutJustification > 0 ? GfColors.Red : r.UsersWithExceptions > 0 ? GfColors.Yellow : GfColors.Green;
+
+    private static string Share(int value, int max) => ChartMath.F(100.0 * value / max);
+
+    private static string Word(int count, string word) => count == 1 ? word : word + "s";
+
+    private static string N(int count, string word) => $"{count} {Word(count, word)}";
+
+    private static string UnusedLink(SnapshotKpi s) => $"review/{s.Snapshot.Id}?usage={UsageEvidenceStatus.Unused90Days}&ptype=User";
+
+    private static string PrincipalNote(DecisionFact f) => f.IsUser ? f.Upn ?? "" : $"{f.Upn} ({f.PrincipalType})".TrimStart();
+
+    private static string ItemLink(DecisionFact f) => f.Kind == ReviewItemKind.GroupMembership && f.GroupId is not null
+        ? $"groups/{f.SnapshotId}?group={Uri.EscapeDataString(f.GroupId)}"
+        : $"review/{f.SnapshotId}?dec=NoAction&q={Uri.EscapeDataString(f.Upn ?? f.DisplayName ?? f.PrincipalId)}";
+
+    private static string DeltaText(int now, int before) => now == before ? "(no change)" : now < before ? $"({now - before})" : $"(+{now - before})";
+
+    private static string DeltaClass(int now, int before) => now < before ? "gf-good" : now > before ? "gf-bad" : "";
+}

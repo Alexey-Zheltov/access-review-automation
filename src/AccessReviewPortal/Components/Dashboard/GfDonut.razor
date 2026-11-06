@@ -1,0 +1,63 @@
+@* Grafana-style donut (pie chart with a hole) and a legend with values and percentages. *@
+<div class="gf-panel">
+    <div class="gf-panel-title">
+        @Title
+        @if (Description is not null)
+        {
+            <span class="gf-info" title="@Description">i</span>
+        }
+    </div>
+    @if (total <= 0)
+    {
+        <div class="gf-empty">@EmptyText</div>
+    }
+    else
+    {
+        <div class="gf-donut">
+            <svg viewBox="0 0 200 200" class="gf-donut-svg" role="img" aria-label="@Title">
+                <circle cx="100" cy="100" r="@ChartMath.F(R)" class="gf-donut-track" stroke-width="26" fill="none" />
+                @{ var offset = 0.0; }
+                @foreach (var slice in Slices.Where(s => s.Value > 0))
+                {
+                    var length = Circumference * slice.Value / total;
+                    <circle cx="100" cy="100" r="@ChartMath.F(R)" fill="none" stroke="@slice.Color" stroke-width="26"
+                            stroke-dasharray="@($"{ChartMath.F(Math.Max(0, length - 1.5))} {ChartMath.F(Circumference)}")"
+                            stroke-dashoffset="@ChartMath.F(-offset)" transform="rotate(-90 100 100)">
+                        <title>@($"{slice.Label}: {ChartMath.F(slice.Value)} ({Pct(slice.Value)}%)")</title>
+                    </circle>
+                    offset += length;
+                }
+                <text x="100" y="104" text-anchor="middle" class="gf-donut-value">@CenterValue</text>
+                <text x="100" y="124" text-anchor="middle" class="gf-donut-label">@CenterLabel</text>
+            </svg>
+            <div class="gf-donut-legend">
+                @foreach (var slice in Slices)
+                {
+                    <div class="gf-donut-legend-row">
+                        <span class="gf-swatch gf-swatch-bar" style="background: @slice.Color"></span>
+                        <span class="gf-donut-legend-name">@slice.Label</span>
+                        <span class="gf-donut-legend-value">@ChartMath.F(slice.Value)</span>
+                        <span class="gf-legend-value">@Pct(slice.Value)%</span>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private const double R = 70;
+    private static readonly double Circumference = 2 * Math.PI * R;
+    private double total;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public IReadOnlyList<DonutSlice> Slices { get; set; } = [];
+    [Parameter] public string? CenterValue { get; set; }
+    [Parameter] public string? CenterLabel { get; set; }
+    [Parameter] public string EmptyText { get; set; } = "No data.";
+
+    protected override void OnParametersSet() => total = Slices.Sum(s => s.Value);
+
+    private string Pct(double value) => ChartMath.F(Math.Round(100 * value / total));
+}

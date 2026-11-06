@@ -1,0 +1,142 @@
+@* Grafana-style chart: stacked columns and/or lines (with optional area) over a category axis. *@
+<div class="gf-panel">
+    <div class="gf-panel-title">
+        @Title
+        @if (Description is not null)
+        {
+            <span class="gf-info" title="@Description">i</span>
+        }
+    </div>
+    @if (Points.Count == 0)
+    {
+        <div class="gf-empty">@EmptyText</div>
+    }
+    else
+    {
+        <svg viewBox="0 0 @ChartMath.F(Width) @ChartMath.F(Height)" class="gf-chart" role="img" aria-label="@Title">
+            <defs>
+                @for (var s = 0; s < Lines.Count; s++)
+                {
+                    if (!Lines[s].Area) continue;
+                    <linearGradient id="@($"{id}-{s}")" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="@Lines[s].Color" stop-opacity="0.32" />
+                        <stop offset="1" stop-color="@Lines[s].Color" stop-opacity="0.03" />
+                    </linearGradient>
+                }
+            </defs>
+
+            @foreach (var tick in ChartMath.Ticks(scale.Max, scale.Step))
+            {
+                var y = Y(tick);
+                <g>
+                    <line x1="@ChartMath.F(Left)" x2="@ChartMath.F(Width - Right)" y1="@ChartMath.F(y)" y2="@ChartMath.F(y)" class="gf-grid-line" />
+                    <text x="@ChartMath.F(Left - 6)" y="@ChartMath.F(y + 4)" text-anchor="end" class="gf-axis">@ChartMath.F(tick)</text>
+                </g>
+            }
+
+            @for (var i = 0; i < Points.Count; i++)
+            {
+                if (!ChartMath.ShowLabel(i, Points.Count, MaxLabels)) continue;
+                <g>
+                    <text x="@ChartMath.F(X(i))" y="@ChartMath.F(Height - Bottom + 16)" text-anchor="middle" class="gf-axis">@Points[i].Label</text>
+                    <text x="@ChartMath.F(X(i))" y="@ChartMath.F(Height - Bottom + 29)" text-anchor="middle" class="gf-axis gf-axis-sub">@Points[i].SubLabel</text>
+                </g>
+            }
+
+            @for (var i = 0; i < Points.Count; i++)
+            {
+                var stackTop = 0.0;
+                for (var s = 0; s < Bars.Count; s++)
+                {
+                    var value = Bars[s].Values[i];
+                    if (value <= 0) continue;
+                    var y0 = Y(stackTop);
+                    var y1 = Y(stackTop + value);
+                    stackTop += value;
+                    <rect x="@ChartMath.F(X(i) - barWidth / 2)" y="@ChartMath.F(y1)" width="@ChartMath.F(barWidth)" height="@ChartMath.F(Math.Max(1, y0 - y1))"
+                          fill="@Bars[s].Color" fill-opacity="0.85">
+                        <title>@($"{Points[i].Tooltip}\n{Bars[s].Name}: {ChartMath.F(value)}")</title>
+                    </rect>
+                }
+            }
+
+            @for (var s = 0; s < Lines.Count; s++)
+            {
+                var series = Lines[s];
+                if (series.Area)
+                {
+                    <path d="@AreaPath(series)" fill="@($"url(#{id}-{s})")" />
+                }
+                <path d="@LinePath(series)" fill="none" stroke="@series.Color" stroke-width="2"
+                      stroke-dasharray="@(series.Dashed ? "6 4" : null)" stroke-linejoin="round" />
+                if (Points.Count <= 60)
+                {
+                    for (var i = 0; i < Points.Count; i++)
+                    {
+                        // Many buckets (daily activity): only points with a value, the line shows the zeros.
+                        if (Points.Count > 12 && series.Values[i] == 0) continue;
+                        <circle cx="@ChartMath.F(X(i))" cy="@ChartMath.F(Y(series.Values[i]))" r="3.5" fill="@series.Color" class="gf-point">
+                            <title>@($"{Points[i].Tooltip}\n{series.Name}: {ChartMath.F(series.Values[i])}")</title>
+                        </circle>
+                    }
+                }
+            }
+        </svg>
+        <div class="gf-legend">
+            @foreach (var series in Bars)
+            {
+                <span class="gf-legend-item"><span class="gf-swatch gf-swatch-bar" style="background: @series.Color"></span>@series.Name <span class="gf-legend-value">total @ChartMath.F(series.Values.Sum())</span></span>
+            }
+            @foreach (var series in Lines)
+            {
+                <span class="gf-legend-item"><span class="gf-swatch @(series.Dashed ? "gf-swatch-dashed" : "")" style="background: @series.Color; border-color: @series.Color"></span>@series.Name <span class="gf-legend-value">@(LinesShowTotal ? "total " + ChartMath.F(series.Values.Sum()) : "last " + ChartMath.F(series.Values[^1]))</span></span>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private const double Left = 40;
+    private const double Right = 14;
+    private const double Top = 14;
+    private const double Bottom = 40;
+
+    private readonly string id = "gf" + Guid.NewGuid().ToString("N")[..8];
+    private (double Max, double Step) scale;
+    private double barWidth;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public IReadOnlyList<ChartPoint> Points { get; set; } = [];
+
+    /// <summary>Stacked columns, bottom first.</summary>
+    [Parameter] public IReadOnlyList<ChartSeries> Bars { get; set; } = [];
+
+    [Parameter] public IReadOnlyList<ChartSeries> Lines { get; set; } = [];
+
+    /// <summary>Legend shows the total of a line series instead of the last value (counts per bucket).</summary>
+    [Parameter] public bool LinesShowTotal { get; set; }
+
+    [Parameter] public double Width { get; set; } = 640;
+    [Parameter] public double Height { get; set; } = 240;
+    [Parameter] public int MaxLabels { get; set; } = 10;
+    [Parameter] public string EmptyText { get; set; } = "No data in the period.";
+
+    protected override void OnParametersSet()
+    {
+        var stacked = Points.Count == 0 ? 0 : Enumerable.Range(0, Points.Count).Max(i => Bars.Sum(b => b.Values[i]));
+        var lines = Lines.Count == 0 || Points.Count == 0 ? 0 : Lines.Max(l => l.Values.Max());
+        scale = ChartMath.NiceScale(Math.Max(stacked, lines));
+        barWidth = Points.Count == 0 ? 0 : Math.Min(36, (Width - Left - Right) / Points.Count * 0.62);
+    }
+
+    private double X(int i) => Left + (Width - Left - Right) * (i + 0.5) / Points.Count;
+
+    private double Y(double value) => Top + (Height - Top - Bottom) * (1 - value / scale.Max);
+
+    private string LinePath(ChartSeries s) =>
+        "M " + string.Join(" L ", Enumerable.Range(0, Points.Count).Select(i => $"{ChartMath.F(X(i))},{ChartMath.F(Y(s.Values[i]))}"));
+
+    private string AreaPath(ChartSeries s) =>
+        $"{LinePath(s)} L {ChartMath.F(X(Points.Count - 1))},{ChartMath.F(Y(0))} L {ChartMath.F(X(0))},{ChartMath.F(Y(0))} Z";
+}

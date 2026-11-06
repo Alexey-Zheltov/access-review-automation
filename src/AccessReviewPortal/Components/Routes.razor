@@ -1,0 +1,21 @@
+@using AccessReviewPortal.Components.Shared
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                @if (context.User.Identity?.IsAuthenticated == true)
+                {
+                    <RedirectTo Url="/account/denied" />
+                }
+                else
+                {
+                    <RedirectTo Url="/account/signin" ReturnToCurrent="true" />
+                }
+            </NotAuthorized>
+            <Authorizing>
+                <p class="text-muted p-4">Checking access...</p>
+            </Authorizing>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

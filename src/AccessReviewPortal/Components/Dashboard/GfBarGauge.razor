@@ -1,0 +1,44 @@
+@* Grafana-style bar gauge: one gradient bar per row, value in the threshold colour. *@
+<div class="gf-panel">
+    <div class="gf-panel-title">
+        @Title
+        @if (Description is not null)
+        {
+            <span class="gf-info" title="@Description">i</span>
+        }
+    </div>
+    @if (Items.Count == 0)
+    {
+        <div class="gf-empty">@EmptyText</div>
+    }
+    else
+    {
+        <div class="gf-bargauge">
+            @foreach (var item in Items)
+            {
+                <div class="gf-bargauge-row">
+                    <div class="gf-bargauge-name" title="@item.Label">@item.Label</div>
+                    <div class="gf-bargauge-track">
+                        <div class="gf-bargauge-fill" style="width: @ChartMath.F(Percent(item))%; background: linear-gradient(90deg, @(item.Color)40, @item.Color)"></div>
+                    </div>
+                    <div class="gf-bargauge-value" style="color: @item.Color">@item.ValueText</div>
+                    @if (item.Note is not null)
+                    {
+                        <div class="gf-note gf-bargauge-note">@item.Note</div>
+                    }
+                </div>
+            }
+        </div>
+    }
+    @ChildContent
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public IReadOnlyList<BarGaugeItem> Items { get; set; } = [];
+    [Parameter] public string EmptyText { get; set; } = "No data.";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private static double Percent(BarGaugeItem item) => item.Max <= 0 ? 0 : Math.Clamp(100 * item.Value / item.Max, 0, 100);
+}

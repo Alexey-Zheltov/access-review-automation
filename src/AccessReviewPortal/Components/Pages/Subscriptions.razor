@@ -1,0 +1,267 @@
+@page "/subscriptions"
+@inject SubscriptionDiscoveryService Discovery
+@inject AccessReviewPortal.Services.Azure.AzureClients Azure
+@inject Microsoft.Extensions.Options.IOptions<AccessReviewPortal.Options.PortalAuthorizationOptions> AuthorizationOptions
+@inject IJSRuntime JS
+
+<PageTitle>Subscriptions</PageTitle>
+
+<h1 class="h4 mb-3">Subscription discovery</h1>
+
+<p class="small text-muted">
+    Management groups and subscriptions found with Azure Resource Graph (ResourceContainers). The scanner needs only <em>Reader</em> and
+    <em>Monitoring Reader</em>. "Monitor in Portal" selects the subscriptions that the next scan reads.
+    Subscriptions that only you can see (not the scanner) are listed too: use the onboarding script below to give the scanner read-only access.
+</p>
+
+<div class="d-flex gap-2 align-items-center mb-2">
+    <button class="btn btn-sm btn-primary" disabled="@(busy || !isAdmin)" @onclick="RefreshAsync">@(busy ? "Discovering..." : "Run discovery now")</button>
+    @if (!isAdmin)
+    {
+        <span class="small text-muted">Discovery and the Monitor switch need the portal role AccessReview.Admin.</span>
+    }
+    @if (lastRefresh is not null)
+    {
+        <span class="small text-muted">Last discovery: @lastRefresh.Value.ToString("yyyy-MM-dd HH:mm") UTC</span>
+    }
+    <span class="ms-auto small">@subscriptions.Count(s => s.IsMonitored) of @subscriptions.Count monitored</span>
+</div>
+
+@foreach (var m in messages)
+{
+    <div class="alert alert-warning py-1 small">@m</div>
+}
+
+<div class="table-responsive mb-4">
+    <table class="table table-sm align-top">
+        <thead class="table-light">
+            <tr>
+                <th>Subscription</th>
+                <th>Management group</th>
+                <th>State</th>
+                <th>Scanner access</th>
+                <th>Defender CSPM / CIEM</th>
+                <th class="text-end">Resources</th>
+                <th>Last scanned</th>
+                <th>Monitor in Portal</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var s in subscriptions)
+            {
+                <tr class="@(s.VisibleToScanner ? "" : "table-warning")">
+                    <td>
+                        <div class="fw-semibold">@s.DisplayName</div>
+                        <div class="small text-muted font-monospace">@s.SubscriptionId</div>
+                    </td>
+                    <td class="small">@(s.ManagementGroupPath ?? s.ManagementGroupName ?? "-")</td>
+                    <td class="small">@s.State</td>
+                    <td class="small">
+                        @if (!s.VisibleToScanner)
+                        {
+                            <span class="badge text-bg-warning">not onboarded</span>
+                        }
+                        else
+                        {
+                            <span class="badge @(s.ScannerReaderOk ? "text-bg-success" : "text-bg-danger")">Reader @(s.ScannerReaderOk ? "OK" : "missing")</span>
+                            <span class="badge @(s.ScannerMonitoringReaderOk ? "text-bg-success" : s.ActivityLogReadable ? "text-bg-secondary" : "text-bg-danger")"
+                                  title="Activity Log readable: @s.ActivityLogReadable">Monitoring Reader @(s.ScannerMonitoringReaderOk ? "OK" : "missing")</span>
+                            @if (s.ScannerHasPrivilegedRoles)
+                            {
+                                <span class="badge text-bg-danger" title="The scanner should be read-only">has write rights</span>
+                            }
+                            <div class="text-muted">@s.ScannerRoles</div>
+                        }
+                        @if (s.DiscoveryError is not null)
+                        {
+                            <div class="text-danger">@s.DiscoveryError</div>
+                        }
+                    </td>
+                    <td class="small">
+                        @if (!s.VisibleToScanner)
+                        {
+                            <span class="text-muted">unknown</span>
+                        }
+                        else
+                        {
+                            <span class="badge @(s.DefenderCspmEnabled ? "text-bg-success" : "text-bg-secondary")">CSPM @(s.DefenderCspmEnabled ? "on" : "off")</span>
+                            <span class="badge @(s.CiemEnabled ? "text-bg-success" : "text-bg-secondary")">CIEM @(s.CiemEnabled ? "Enabled" : "Disabled")</span>
+                        }
+                    </td>
+                    <td class="text-end">@s.ResourceCount</td>
+                    <td class="small">@(s.LastScannedUtc?.ToString("yyyy-MM-dd HH:mm") ?? "never")</td>
+                    <td>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" checked="@s.IsMonitored" disabled="@(!isAdmin || !s.VisibleToScanner)"
+                                   @onchange="e => ToggleAsync(s, e)" />
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    @if (subscriptions.Count == 0)
+    {
+        <div class="alert alert-secondary small">Discovery has not run yet. Click "Run discovery now". Until then the scanner reads all subscriptions it can see.</div>
+    }
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">Onboarding script generator</div>
+    <div class="card-body">
+        @if (scannerObjectId is null)
+        {
+            <p class="small text-muted mb-0">Run discovery first: it reads the object id of the scanner identity.</p>
+        }
+        else
+        {
+            <div class="row g-3">
+                <div class="col-lg-4">
+                    <label class="form-label">Management groups</label>
+                    <div class="border rounded p-2 small" style="max-height: 220px; overflow-y: auto">
+                        @foreach (var mg in managementGroups)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="mg-@mg.Name" checked="@selectedMgs.Contains(mg.Name)" @onchange="() => Toggle(selectedMgs, mg.Name)" />
+                                <label class="form-check-label" for="mg-@mg.Name">@mg.DisplayName <span class="text-muted">(@mg.Name)@(mg.VisibleToScanner ? "" : " – not visible to the scanner")</span></label>
+                            </div>
+                        }
+                        @if (managementGroups.Count == 0)
+                        {
+                            <span class="text-muted">No management groups found.</span>
+                        }
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <label class="form-label">Subscriptions</label>
+                    <div class="form-check form-switch small mb-1">
+                        <input class="form-check-input" type="checkbox" id="newOnly" @bind="onlyNotOnboarded" />
+                        <label class="form-check-label" for="newOnly">Only subscriptions without full scanner access</label>
+                    </div>
+                    <div class="border rounded p-2 small" style="max-height: 190px; overflow-y: auto">
+                        @foreach (var s in subscriptions.Where(s => !onlyNotOnboarded || !s.VisibleToScanner || !s.ScannerReaderOk || !s.ScannerMonitoringReaderOk))
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="sub-@s.SubscriptionId" checked="@selectedSubs.Contains(s.SubscriptionId)" @onchange="() => Toggle(selectedSubs, s.SubscriptionId)" />
+                                <label class="form-check-label" for="sub-@s.SubscriptionId">@s.DisplayName</label>
+                            </div>
+                        }
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <label class="form-label">Format</label>
+                    <select class="form-select form-select-sm mb-2" @bind="format">
+                        <option value="@SubscriptionDiscoveryService.ScriptFormat.PowerShell">PowerShell (Az.Resources)</option>
+                        <option value="@SubscriptionDiscoveryService.ScriptFormat.AzureCli">Azure CLI (bash)</option>
+                    </select>
+                    <div class="small text-muted">The script assigns only Reader and Monitoring Reader to the scanner. Run it as Owner, User Access Administrator or Role Based Access Control Administrator on the selected scopes.</div>
+                </div>
+            </div>
+
+            @if (selectedMgs.Count + selectedSubs.Count > 0)
+            {
+                var script = Script();
+                <div class="d-flex gap-2 mt-3 mb-1">
+                    <button class="btn btn-sm btn-outline-primary" @onclick="() => CopyAsync(script)">Copy script</button>
+                    <a class="btn btn-sm btn-outline-secondary" download="@(format == SubscriptionDiscoveryService.ScriptFormat.PowerShell ? "onboard-accessreview-scanner.ps1" : "onboard-accessreview-scanner.sh")"
+                       href="@("data:text/plain;charset=utf-8," + Uri.EscapeDataString(script))">Download</a>
+                    @if (copied is not null)
+                    {
+                        <span class="small text-success align-self-center">@copied</span>
+                    }
+                </div>
+                <pre class="script-preview mb-0">@script</pre>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private ClaimsPrincipal user = new();
+    private bool isAdmin;
+    private List<MonitoredSubscription> subscriptions = [];
+    private List<ManagementGroupItem> managementGroups = [];
+    private readonly List<string> messages = [];
+    private string? scannerObjectId;
+    private string? scannerAppId;
+    private DateTime? lastRefresh;
+    private bool busy;
+    private bool onlyNotOnboarded = true;
+    private SubscriptionDiscoveryService.ScriptFormat format = SubscriptionDiscoveryService.ScriptFormat.PowerShell;
+    private readonly HashSet<string> selectedMgs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> selectedSubs = new(StringComparer.OrdinalIgnoreCase);
+    private string? copied;
+
+    protected override async Task OnInitializedAsync()
+    {
+        user = (await AuthState).User;
+        isAdmin = user.IsPortalAdmin(AuthorizationOptions.Value);
+        subscriptions = await Discovery.GetAllAsync(CancellationToken.None);
+        lastRefresh = subscriptions.Max(s => s.LastDiscoveredUtc);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Management groups and the scanner id come from a live discovery; it runs once the page is interactive.
+        if (firstRender && RendererInfo.IsInteractive && isAdmin)
+        {
+            await RefreshAsync();
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        busy = true;
+        messages.Clear();
+        StateHasChanged();
+        try
+        {
+            var result = await Discovery.RefreshAsync(user, CancellationToken.None);
+            subscriptions = result.Subscriptions;
+            managementGroups = result.ManagementGroups;
+            scannerObjectId = result.ScannerObjectId;
+            scannerAppId = result.ScannerAppId;
+            messages.AddRange(result.Messages);
+            lastRefresh = DateTime.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            messages.Add("Discovery failed: " + ex.Message);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task ToggleAsync(MonitoredSubscription s, ChangeEventArgs e)
+    {
+        var monitored = e.Value is bool b && b;
+        await Discovery.SetMonitoredAsync(s.SubscriptionId, monitored, CancellationToken.None);
+        s.IsMonitored = monitored && s.VisibleToScanner;
+    }
+
+    private static void Toggle(HashSet<string> set, string value)
+    {
+        if (!set.Remove(value)) set.Add(value);
+    }
+
+    private string Script() => SubscriptionDiscoveryService.BuildOnboardingScript(format, scannerObjectId!, scannerAppId, Azure.TenantId,
+        selectedMgs.ToList(), selectedSubs.ToList());
+
+    private async Task CopyAsync(string script)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", script);
+            copied = "Copied to the clipboard.";
+        }
+        catch (JSException)
+        {
+            copied = "The browser blocked the clipboard. Select the text below and copy it.";
+        }
+    }
+}

@@ -1,0 +1,437 @@
+@page "/"
+@implements IDisposable
+@inject ScanJobManager Jobs
+@inject SnapshotService Snapshots
+@inject SettingsService Settings
+
+<PageTitle>Snapshots &amp; Live Scan</PageTitle>
+
+<h1 class="h4 mb-3">Snapshots and live scan</h1>
+
+<div class="row g-3 mb-3">
+    <div class="col-xl-5">
+        <div class="card h-100">
+            <div class="card-header fw-semibold">Run Live Scan</div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <label class="form-label">Snapshot label</label>
+                    <input class="form-control" @bind="label" placeholder="Q1 Baseline" disabled="@job.IsRunning" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Inactivity threshold (days)</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control" min="1" max="3650" @bind="threshold" />
+                        <button class="btn btn-outline-secondary" @onclick="SaveThresholdAsync">Save</button>
+                    </div>
+                    <div class="form-text">Used by new scans and by "Recalculate". For a quick repro on a test subscription you can set 1 day.</div>
+                </div>
+                <button class="btn btn-primary" disabled="@job.IsRunning" @onclick="StartScan">Run Live Scan</button>
+                @if (message is not null)
+                {
+                    <div class="alert alert-secondary mt-2 mb-0 py-1 small">@message</div>
+                }
+                @if (job.StartedUtc != default)
+                {
+                    <div class="mt-3">
+                        <div class="d-flex justify-content-between small mb-1">
+                            <span>@job.Step</span><span>@job.Percent %</span>
+                        </div>
+                        <div class="progress" style="height: 8px;">
+                            <div class="progress-bar @(job.IsRunning ? "progress-bar-striped progress-bar-animated" : job.Error is null ? "bg-success" : "bg-danger")"
+                                 style="width: @(job.Percent)%"></div>
+                        </div>
+                        @if (job.Error is not null)
+                        {
+                            <div class="text-danger small mt-1">@job.Error</div>
+                        }
+                        <div class="scan-log mt-2">
+                            @foreach (var e in job.Log.TakeLast(16))
+                            {
+                                <div class="@(e.Level == "Warning" ? "log-warn" : "")">@e.TimestampUtc.ToString("HH:mm:ss") @e.Message</div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-7">
+        <div class="card h-100">
+            <div class="card-header fw-semibold">Compare Current Snapshot vs Baseline Snapshot</div>
+            <div class="card-body">
+                @if (completed.Count == 0)
+                {
+                    <p class="text-muted mb-0">No completed snapshots yet. Run the first scan: it becomes the baseline for the next one.</p>
+                }
+                else
+                {
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <label class="form-label">Current snapshot</label>
+                            <select class="form-select" @bind="currentId" @bind:after="OnCurrentChangedAsync">
+                                @foreach (var s in completed)
+                                {
+                                    <option value="@s.Id">#@s.Id @s.Label (@s.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm"))</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Baseline snapshot</label>
+                            <select class="form-select" @bind="baselineId">
+                                <option value="0">None (no mover detection)</option>
+                                @foreach (var s in completed.Where(s => s.Id != currentId))
+                                {
+                                    <option value="@s.Id">#@s.Id @s.Label (@s.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm"))</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mt-3 d-flex gap-2 align-items-center">
+                        <button class="btn btn-outline-primary" @onclick="RecalculateAsync" disabled="@busy">Recalculate recommendations</button>
+                        <a class="btn btn-link" href="review/@currentId">Open review table</a>
+                        @if (current is not null)
+                        {
+                            <span class="small text-muted">Last calculation: baseline @(current.BaselineSnapshotId is null ? "none" : "#" + current.BaselineSnapshotId), threshold @current.InactivityThresholdDays days</span>
+                        }
+                    </div>
+                    <div class="form-text mt-2">
+                        Repro: 1) run a scan (baseline); 2) in Entra ID change Department or Manager of a test user, or disable the account;
+                        3) run a second scan. The second snapshot is compared with the previous one and the user's rows get
+                        <em>Remove: Department/Manager Changed</em>. You can compare any two snapshots here.
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (stats is not null && current is not null)
+{
+    <h2 class="h5 mt-4">Snapshot #@current.Id &ldquo;@current.Label&rdquo;</h2>
+    <div class="row g-3 mb-3">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header">Assignments by level (@stats.Total rows)</div>
+                <ul class="list-group list-group-flush">
+                    @foreach (var level in Enum.GetValues<ScopeLevel>())
+                    {
+                        <li class="list-group-item d-flex justify-content-between">
+                            <span>@DisplayText.Of(level)</span><span class="fw-semibold">@stats.ByLevel.GetValueOrDefault(level)</span>
+                        </li>
+                    }
+                    <li class="list-group-item d-flex justify-content-between small text-muted">
+                        <span>Rows via group membership</span><span>@stats.ViaGroup</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between small text-muted">
+                        <span>Permanent / PIM Active / PIM Eligible</span>
+                        <span>@stats.ByType.GetValueOrDefault(AssignmentType.Permanent) / @stats.ByType.GetValueOrDefault(AssignmentType.PimActive) / @stats.ByType.GetValueOrDefault(AssignmentType.PimEligible)</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header">Recommendations</div>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between"><span><span class="badge rec-Remove">Remove</span></span><span class="fw-semibold">@stats.ByRecommendation.GetValueOrDefault(RecommendedAction.Remove)</span></li>
+                    @foreach (var r in stats.RemoveReasons)
+                    {
+                        <li class="list-group-item d-flex justify-content-between small ps-4"><span>@r.Name</span><span>@r.Count</span></li>
+                    }
+                    <li class="list-group-item d-flex justify-content-between"><span><span class="badge rec-Review">Review</span></span><span class="fw-semibold">@stats.ByRecommendation.GetValueOrDefault(RecommendedAction.Review)</span></li>
+                    @foreach (var r in stats.ReviewReasons)
+                    {
+                        <li class="list-group-item d-flex justify-content-between small ps-4"><span>@r.Name</span><span>@r.Count</span></li>
+                    }
+                    <li class="list-group-item d-flex justify-content-between"><span><span class="badge rec-NoAction">No Action</span></span><span class="fw-semibold">@stats.ByRecommendation.GetValueOrDefault(RecommendedAction.NoAction)</span></li>
+                </ul>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header">Usage evidence and review progress</div>
+                <ul class="list-group list-group-flush">
+                    @foreach (var u in Enum.GetValues<UsageEvidenceStatus>())
+                    {
+                        <li class="list-group-item d-flex justify-content-between"><span><span class="badge usage-@u">@u</span></span><span class="fw-semibold">@stats.ByUsage.GetValueOrDefault(u)</span></li>
+                    }
+                    <li class="list-group-item d-flex justify-content-between small">
+                        <span>Reviewer decisions: pending / keep / approve removal</span>
+                        <span>@stats.ByDecision.GetValueOrDefault(ReviewerDecision.Pending) / @stats.ByDecision.GetValueOrDefault(ReviewerDecision.NoAction) / @stats.ByDecision.GetValueOrDefault(ReviewerDecision.Removed)</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between small"><span>Users in snapshot</span><span>@stats.Users</span></li>
+                    <li class="list-group-item d-flex justify-content-between small"><span>New since baseline</span><span>@stats.NewSinceBaseline</span></li>
+                    <li class="list-group-item d-flex justify-content-between"><span>PostgreSQL database size</span><span class="fw-semibold">@Mb(dbBytes) MB</span></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Microsoft Defender for Cloud CSPM (CIEM) findings on assignments</div>
+        <div class="card-body py-2 d-flex flex-wrap gap-4">
+            @foreach (var d in Enum.GetValues<DefenderCspmStatus>().Where(d => d != DefenderCspmStatus.None))
+            {
+                <a class="text-decoration-none" href="review/@current.Id"><span class="badge defender-@d">@DisplayText.Of(d)</span> <span class="fw-semibold">@stats.ByDefender.GetValueOrDefault(d)</span></a>
+            }
+            <span class="small text-muted">Rows with no finding: @stats.ByDefender.GetValueOrDefault(DefenderCspmStatus.None). A row can have more than one finding; the badge shows the most important one.</span>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(current.UsageSources))
+    {
+        <div class="small text-muted mb-3"><strong>Usage sources:</strong> @current.UsageSources.Replace("\n", " · ")</div>
+    }
+
+    @if (movers is not null)
+    {
+        <div class="card mb-3">
+            <div class="card-header">Movers and leavers vs baseline #@baselineId (@movers.Count)</div>
+            @if (movers.Count == 0)
+            {
+                <div class="card-body text-muted small">No department, manager or account status changes for users with assignments.</div>
+            }
+            else
+            {
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>User</th><th>Change</th><th>Rows</th></tr></thead>
+                    <tbody>
+                        @foreach (var m in movers)
+                        {
+                            <tr>
+                                <td>@m.Current.DisplayName <span class="small text-muted">@m.Current.Upn</span></td>
+                                <td>@m.Change</td>
+                                <td><a href="review/@currentId?q=@Uri.EscapeDataString(m.Current.Upn ?? m.Current.UserId)">@m.Assignments</a></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+}
+
+<div class="card mb-3">
+    <div class="card-header">Snapshots</div>
+    <table class="table table-sm mb-0 align-middle">
+        <thead>
+            <tr><th>#</th><th>Label</th><th>Scanned (UTC)</th><th>Started by</th><th>Status</th><th>Users</th><th>Rows</th><th>Baseline</th><th>DB size after scan</th><th></th></tr>
+        </thead>
+        <tbody>
+            @foreach (var s in snapshots)
+            {
+                <tr>
+                    <td>@s.Id</td>
+                    <td>@s.Label</td>
+                    <td>@s.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                    <td class="small">@DisplayText.Of(s.Trigger)<div class="text-muted">@s.StartedByUpn</div></td>
+                    <td>
+                        <span class="badge @(s.Status == ScanStatus.Completed ? "text-bg-success" : s.Status == ScanStatus.Running ? "text-bg-primary" : "text-bg-danger")">@s.Status</span>
+                        @if (s.Error is not null) { <div class="small text-danger">@s.Error</div> }
+                    </td>
+                    <td>@s.TotalUsers</td>
+                    <td>@s.TotalAssignments</td>
+                    <td>@(s.BaselineSnapshotId is null ? "-" : "#" + s.BaselineSnapshotId)</td>
+                    <td>@(s.DatabaseSizeBytes == 0 ? "-" : Mb(s.DatabaseSizeBytes) + " MB")</td>
+                    <td class="text-end text-nowrap">
+                        @if (s.Status == ScanStatus.Completed)
+                        {
+                            <a class="btn btn-sm btn-outline-primary" href="review/@s.Id">Review</a>
+                            <a class="btn btn-sm btn-outline-success" href="export/@s.Id/xlsx" download target="_top">Excel</a>
+                        }
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleLogAsync(s.Id)">Log</button>
+                        @if (confirmDelete == s.Id)
+                        {
+                            <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(s.Id)">Confirm delete</button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-sm btn-outline-danger" disabled="@(s.Status == ScanStatus.Running)" @onclick="() => confirmDelete = s.Id">Delete</button>
+                        }
+                    </td>
+                </tr>
+                @if (logFor == s.Id && log is not null)
+                {
+                    <tr>
+                        <td colspan="10">
+                            <div class="scan-log">
+                                @foreach (var e in log)
+                                {
+                                    <div class="@(e.Level == "Warning" ? "log-warn" : "")">@e.TimestampUtc.ToString("HH:mm:ss") [@e.Level] @e.Message</div>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@if (tables is not null)
+{
+    <div class="card mb-4">
+        <div class="card-header">PostgreSQL storage (answers "how big is the database")</div>
+        <div class="card-body small">
+            <p class="mb-2">
+                Database: <strong>@Mb(dbBytes) MB</strong>.
+                @if (bytesPerRow > 0)
+                {
+                    <span>One review row takes about <strong>@((bytesPerRow / 1024.0).ToString("F1")) KB</strong> including indexes.
+                        10,000 assignments per quarter is about <strong>@((bytesPerRow * 10000 / 1024.0 / 1024.0).ToString("F0")) MB</strong> per snapshot,
+                        so several years of quarterly snapshots stay well below 1 GB.</span>
+                }
+            </p>
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Table</th><th>Rows</th><th>Size (incl. indexes)</th></tr></thead>
+                <tbody>
+                    @foreach (var t in tables)
+                    {
+                        <tr><td>@t.Name</td><td>@t.Rows</td><td>@((t.Bytes / 1024.0).ToString("F0")) KB</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private ScanJobState job = new();
+    private string label = "";
+    private int threshold = 90;
+    private string? message;
+    private bool busy;
+
+    private List<ScanSnapshot> snapshots = [];
+    private List<ScanSnapshot> completed = [];
+    private int currentId;
+    private int baselineId;
+    private ScanSnapshot? current;
+    private SnapshotStats? stats;
+    private List<MoverInfo>? movers;
+    private long dbBytes;
+    private List<TableSize>? tables;
+    private double bytesPerRow;
+
+    private int? logFor;
+    private List<ScanLogEntry>? log;
+    private int? confirmDelete;
+    private DateTime? lastFinished;
+
+    protected override async Task OnInitializedAsync()
+    {
+        job = Jobs.State;
+        Jobs.Changed += OnJobChanged;
+        threshold = await Settings.GetInactivityThresholdDaysAsync();
+        label = $"Scan {DateTime.UtcNow:yyyy-MM-dd}";
+        await LoadAsync(selectLatest: true);
+    }
+
+    private async Task LoadAsync(bool selectLatest)
+    {
+        snapshots = await Snapshots.GetSnapshotsAsync();
+        completed = snapshots.Where(s => s.Status == ScanStatus.Completed).ToList();
+        if (completed.Count == 0)
+        {
+            current = null;
+            stats = null;
+        }
+        else
+        {
+            if (selectLatest || completed.All(s => s.Id != currentId))
+            {
+                currentId = completed[0].Id;
+                baselineId = completed[0].BaselineSnapshotId ?? 0;
+            }
+            await LoadCurrentAsync();
+        }
+        var storage = await Snapshots.GetStorageAsync();
+        dbBytes = storage.DatabaseBytes;
+        tables = storage.Tables;
+        var rowsTable = tables.FirstOrDefault(t => t.Name == "RoleAssignmentSnapshots");
+        bytesPerRow = rowsTable is { Rows: > 0 } ? (double)rowsTable.Bytes / rowsTable.Rows : 0;
+    }
+
+    private async Task LoadCurrentAsync()
+    {
+        current = completed.FirstOrDefault(s => s.Id == currentId);
+        stats = current is null ? null : await Snapshots.GetStatsAsync(current.Id);
+        movers = current is not null && baselineId > 0 ? await Snapshots.GetMoversAsync(current.Id, baselineId) : null;
+    }
+
+    private async Task OnCurrentChangedAsync()
+    {
+        var s = completed.FirstOrDefault(x => x.Id == currentId);
+        baselineId = s?.BaselineSnapshotId ?? 0;
+        await LoadCurrentAsync();
+    }
+
+    private async Task StartScan()
+    {
+        var upn = (await AuthState).User.GetUpn();
+        message = Jobs.TryStart(label, ScanTrigger.Manual, upn) ? null : "A scan is already running.";
+        job = Jobs.State;
+    }
+
+    private async Task SaveThresholdAsync()
+    {
+        await Settings.SetInactivityThresholdDaysAsync(threshold);
+        threshold = await Settings.GetInactivityThresholdDaysAsync();
+        message = $"Inactivity threshold saved: {threshold} days. Use \"Recalculate\" to apply it to an existing snapshot.";
+    }
+
+    private async Task RecalculateAsync()
+    {
+        if (currentId == 0) return;
+        busy = true;
+        try
+        {
+            var count = await Snapshots.RecalculateAsync(currentId, baselineId == 0 ? null : baselineId, threshold);
+            message = $"Recalculated {count} rows of snapshot #{currentId} with baseline {(baselineId == 0 ? "none" : "#" + baselineId)} and threshold {threshold} days.";
+            await LoadAsync(selectLatest: false);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task ToggleLogAsync(int id)
+    {
+        if (logFor == id)
+        {
+            logFor = null;
+            return;
+        }
+        logFor = id;
+        log = await Snapshots.GetLogAsync(id);
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        confirmDelete = null;
+        await Snapshots.DeleteSnapshotAsync(id);
+        await LoadAsync(selectLatest: currentId == id);
+    }
+
+    private void OnJobChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            job = Jobs.State;
+            if (!job.IsRunning && job.FinishedUtc is { } finished && lastFinished != finished)
+            {
+                lastFinished = finished;
+                await LoadAsync(selectLatest: true);
+            }
+            StateHasChanged();
+        });
+    }
+
+    private static string Mb(long bytes) => (bytes / 1024.0 / 1024.0).ToString("F2");
+
+    public void Dispose() => Jobs.Changed -= OnJobChanged;
+}

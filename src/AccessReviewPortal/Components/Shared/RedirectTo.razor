@@ -1,0 +1,19 @@
+@inject NavigationManager Navigation
+
+@code {
+    [Parameter, EditorRequired] public string Url { get; set; } = "/";
+
+    /// <summary>Adds ?returnUrl=&lt;current page&gt; so the user comes back after sign-in.</summary>
+    [Parameter] public bool ReturnToCurrent { get; set; }
+
+    protected override void OnInitialized()
+    {
+        var target = Url;
+        if (ReturnToCurrent)
+        {
+            var current = "/" + Navigation.ToBaseRelativePath(Navigation.Uri);
+            target += (target.Contains('?') ? "&" : "?") + "returnUrl=" + Uri.EscapeDataString(current);
+        }
+        Navigation.NavigateTo(target, forceLoad: true);
+    }
+}

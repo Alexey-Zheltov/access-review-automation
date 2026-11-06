@@ -1,0 +1,73 @@
+@page "/diagnostics"
+@inject DiagnosticsService DiagnosticsSvc
+
+
+<PageTitle>Diagnostics</PageTitle>
+
+<h1 class="h4 mb-3">Diagnostics</h1>
+<p class="small text-muted">
+    Checks the PostgreSQL connection, what the scanner identity can read in Microsoft Graph and Azure Resource Manager,
+    and that the scanner has <strong>no</strong> write rights (zero-privilege). Required Graph application permissions: User.Read.All,
+    Directory.Read.All, RoleManagement.Read.Directory, AuditLog.Read.All, AccessReview.Read.All. Azure RBAC: Reader and
+    Monitoring Reader on the management group or subscriptions. Changes are made only with the token of the signed-in reviewer;
+    the last section shows what your own sign-in allows.
+</p>
+
+<button class="btn btn-primary mb-3" disabled="@running" @onclick="RunAsync">@(running ? "Running checks..." : "Run checks again")</button>
+
+@if (checks is null)
+{
+    <p class="text-muted">Running checks...</p>
+}
+else
+{
+    <table class="table table-sm align-middle">
+        <thead class="table-light"><tr><th>Area</th><th>Check</th><th>Status</th><th>Details</th></tr></thead>
+        <tbody>
+            @foreach (var c in checks)
+            {
+                <tr>
+                    <td class="text-nowrap">@c.Area</td>
+                    <td>@c.Name</td>
+                    <td><span class="badge diag-@c.Status">@c.Status</span></td>
+                    <td class="small">@c.Details</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+    private List<DiagnosticCheck>? checks;
+    private bool running;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Checks call Graph and ARM; they run after the page is interactive instead of blocking the first render.
+        if (firstRender && RendererInfo.IsInteractive)
+        {
+            await RunAsync();
+            StateHasChanged();
+        }
+    }
+
+    private async Task RunAsync()
+    {
+        running = true;
+        StateHasChanged();
+        try
+        {
+            checks = await DiagnosticsSvc.RunAsync((await AuthState).User, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // A failed check must never stop the page (Blazor circuit): show it as a result row.
+            checks = [.. checks ?? [], new DiagnosticCheck("Diagnostics", "Run checks", DiagnosticsService.Failed, $"{ex.GetType().Name}: {ex.Message}")];
+        }
+        finally
+        {
+            running = false;
+        }
+    }
+}

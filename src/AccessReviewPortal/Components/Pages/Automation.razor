@@ -1,0 +1,258 @@
+@page "/automation"
+@attribute [Authorize(Policy = PortalPolicies.Admin)]
+@implements IDisposable
+@inject AutomationService AutomationSvc
+@inject ScanJobManager Jobs
+@inject IServiceScopeFactory ScopeFactory
+
+<PageTitle>Automation</PageTitle>
+
+<h1 class="h4 mb-3">Automation &ndash; scheduled snapshots and quarterly campaigns</h1>
+
+<p class="small text-muted">
+    Microsoft Graph keeps sign-in and audit logs for 30 days only. The <strong>monthly activity snapshot</strong> stores this evidence in PostgreSQL,
+    so a full 90-day review period is always covered. The <strong>quarterly campaign</strong> takes a new snapshot, compares it with the baseline
+    of the quarter (the previous campaign or the last snapshot before the quarter), calculates the recommendations, stores the Excel report
+    in the campaign archive and sends a "review ready" message to the webhook (Power Automate, Logic Apps or a Teams workflow).
+    All times are UTC. If the portal was down at the planned time, the run starts when it is back (up to 7 days later).
+</p>
+
+@if (settings is null)
+{
+    <p class="text-muted">Loading...</p>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header fw-semibold">Monthly Activity Snapshot</div>
+                <div class="card-body">
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="monthly" @bind="settings.MonthlySnapshotEnabled" />
+                        <label class="form-check-label" for="monthly">Enabled</label>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="form-label small">Day of month (1-28)</label>
+                            <input type="number" min="1" max="28" class="form-control form-control-sm" @bind="settings.MonthlyDayOfMonth" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small">Time (UTC, HH:mm)</label>
+                            <input class="form-control form-control-sm" @bind="settings.MonthlyTimeUtc" />
+                        </div>
+                    </div>
+                    <div class="small mt-2">
+                        Next run: <strong>@(NextMonthly()?.ToString("yyyy-MM-dd HH:mm") ?? "disabled")</strong> &middot;
+                        last run: @(state?.LastMonthlyRunUtc?.ToString("yyyy-MM-dd HH:mm") ?? "never")
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary mt-2" disabled="@(Jobs.State.IsRunning || running)" @onclick="RunMonthlyNowAsync">Run monthly snapshot now</button>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header fw-semibold">Quarterly Campaign Run</div>
+                <div class="card-body">
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="quarterly" @bind="settings.QuarterlyCampaignEnabled" />
+                        <label class="form-check-label" for="quarterly">Enabled</label>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-4">
+                            <label class="form-label small">Months</label>
+                            <input class="form-control form-control-sm" @bind="months" placeholder="1,4,7,10" />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label small">Day of month</label>
+                            <input type="number" min="1" max="28" class="form-control form-control-sm" @bind="settings.QuarterlyDayOfMonth" />
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label small">Time (UTC)</label>
+                            <input class="form-control form-control-sm" @bind="settings.QuarterlyTimeUtc" />
+                        </div>
+                    </div>
+                    <div class="small mt-2">
+                        Next run: <strong>@(NextQuarterly()?.ToString("yyyy-MM-dd HH:mm") ?? "disabled")</strong> &middot;
+                        last run: @(state?.LastQuarterlyRunUtc?.ToString("yyyy-MM-dd HH:mm") ?? "never")
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary mt-2" disabled="@(Jobs.State.IsRunning || running)" @onclick="RunCampaignNowAsync">Run quarterly campaign now</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <label class="form-label">Notification webhook URL (optional)</label>
+            <input class="form-control form-control-sm" @bind="settings.NotificationWebhookUrl" placeholder="https://prod-00.westeurope.logic.azure.com/workflows/..." />
+            <div class="form-text">
+                The portal sends an HTTP POST with JSON: eventType, campaignId, campaign, snapshotId, baselineSnapshotId, totalRows,
+                removeRecommended, reviewRecommended, reportUrl, portalReviewUrl, createdAtUtc. Use the trigger "When an HTTP request is received" in Power Automate.
+            </div>
+            <div class="d-flex gap-2 align-items-center mt-2">
+                <button class="btn btn-sm btn-primary" @onclick="SaveAsync">Save settings</button>
+                @if (state?.LastCheckUtc is not null)
+                {
+                    <span class="small text-muted">Scheduler last check: @state.LastCheckUtc.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC. @state.LastResult</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (message is not null)
+    {
+        <div class="alert alert-info py-1 small">@message</div>
+    }
+    @if (Jobs.State.IsRunning)
+    {
+        <div class="alert alert-secondary py-1 small">Scan running: @Jobs.State.Label &ndash; @Jobs.State.Step (@Jobs.State.Percent %)</div>
+    }
+
+    <div class="card mb-4">
+        <div class="card-header">Campaign archive</div>
+        <table class="table table-sm mb-0 align-middle">
+            <thead>
+                <tr><th>#</th><th>Campaign</th><th>Started</th><th>Status</th><th>Snapshot / baseline</th><th class="text-end">Rows</th><th class="text-end">Remove / Review</th><th>Notification</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var c in campaigns)
+                {
+                    <tr>
+                        <td>@c.Id</td>
+                        <td>@c.Name<div class="small text-muted">@DisplayText.Of(c.Trigger) &middot; @c.StartedByUpn</div></td>
+                        <td class="small">@c.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>
+                            <span class="badge @(c.Status == CampaignStatus.Completed ? "text-bg-success" : c.Status == CampaignStatus.Running ? "text-bg-primary" : "text-bg-danger")">@c.Status</span>
+                            @if (c.Error is not null) { <div class="small text-danger">@c.Error</div> }
+                        </td>
+                        <td class="small">
+                            @if (c.ScanSnapshotId is not null)
+                            {
+                                <a href="review/@c.ScanSnapshotId">#@c.ScanSnapshotId</a>
+                            }
+                            @(c.BaselineSnapshotId is null ? "" : " vs #" + c.BaselineSnapshotId)
+                        </td>
+                        <td class="text-end">@c.TotalRows</td>
+                        <td class="text-end">@c.RemoveCount / @c.ReviewCount</td>
+                        <td class="small">@(c.NotificationStatus ?? "-")</td>
+                        <td class="text-end">
+                            @if (c.ReportFileName is not null)
+                            {
+                                <a class="btn btn-sm btn-outline-success" href="campaigns/@c.Id/report.xlsx" download target="_top">Excel (@((c.ReportSizeBytes / 1024.0).ToString("F0")) KB)</a>
+                            }
+                        </td>
+                    </tr>
+                }
+                @if (campaigns.Count == 0)
+                {
+                    <tr><td colspan="9" class="text-muted small">No campaigns yet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private AutomationSettings? settings;
+    private AutomationState? state;
+    private List<ReviewCampaign> campaigns = [];
+    private string months = "";
+    private string? message;
+    private bool running;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Jobs.Changed += OnJobChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        settings = await AutomationSvc.GetSettingsAsync();
+        state = await AutomationSvc.GetStateAsync();
+        campaigns = await AutomationSvc.GetCampaignsAsync();
+        months = string.Join(",", settings.QuarterlyMonths);
+    }
+
+    private DateTime? NextMonthly() => settings is null ? null
+        : AutomationService.NextRun(DateTime.UtcNow, settings.MonthlySnapshotEnabled, settings.MonthlyDayOfMonth, settings.MonthlyTimeUtc, null, state?.LastMonthlyRunUtc);
+
+    private DateTime? NextQuarterly() => settings is null ? null
+        : AutomationService.NextRun(DateTime.UtcNow, settings.QuarterlyCampaignEnabled, settings.QuarterlyDayOfMonth, settings.QuarterlyTimeUtc,
+            ParseMonths(), state?.LastQuarterlyRunUtc);
+
+    private int[] ParseMonths() => months.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries)
+        .Select(m => int.TryParse(m, out var n) ? n : 0).Where(n => n is >= 1 and <= 12).Distinct().Order().ToArray();
+
+    private async Task SaveAsync()
+    {
+        settings!.QuarterlyMonths = ParseMonths();
+        await AutomationSvc.SaveSettingsAsync(settings);
+        await LoadAsync();
+        message = "Settings saved.";
+    }
+
+    private async Task RunMonthlyNowAsync()
+    {
+        var upn = (await AuthState).User.GetUpn();
+        running = true;
+        message = "Monthly snapshot started. You can leave the page; the scan continues in the background.";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = ScopeFactory.CreateScope();
+                var id = await scope.ServiceProvider.GetRequiredService<AutomationService>().RunMonthlySnapshotAsync(upn, CancellationToken.None);
+                message = id is null ? "Another scan is running. Try again later." : $"Monthly snapshot #{id} completed.";
+            }
+            catch (Exception ex)
+            {
+                message = "Monthly snapshot failed: " + ex.Message;
+            }
+            running = false;
+            await RefreshViewAsync();
+        });
+    }
+
+    private async Task RunCampaignNowAsync()
+    {
+        var upn = (await AuthState).User.GetUpn();
+        running = true;
+        message = "Quarterly campaign started: scan, baseline comparison, recommendations, Excel report and notification. You can leave the page.";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = ScopeFactory.CreateScope();
+                var campaign = await scope.ServiceProvider.GetRequiredService<AutomationService>().RunQuarterlyCampaignAsync(ScanTrigger.QuarterlyCampaign, upn, CancellationToken.None);
+                message = $"Campaign #{campaign.Id} '{campaign.Name}': {campaign.Status}. {campaign.Error}";
+                campaigns = await scope.ServiceProvider.GetRequiredService<AutomationService>().GetCampaignsAsync();
+            }
+            catch (Exception ex)
+            {
+                message = "Campaign failed: " + ex.Message;
+            }
+            running = false;
+            await RefreshViewAsync();
+        });
+    }
+
+    /// <summary>The run continues when the user leaves the page; then there is no view to refresh.</summary>
+    private async Task RefreshViewAsync()
+    {
+        try
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private void OnJobChanged() => _ = RefreshViewAsync();
+
+    public void Dispose() => Jobs.Changed -= OnJobChanged;
+}

@@ -1,0 +1,69 @@
+# Access Review Automation Portal (sample / prototype): PostgreSQL 18 + ASP.NET Core (.NET 10).
+#
+#   1. Copy .env.example to .env and fill it in.
+#   2. Put the TLS certificate (PFX) into ./certs (name and password in .env).
+#   3. docker compose up -d --build
+#
+# "up" starts PostgreSQL, runs the migration bundle (service "migrate", it exits when the schema is up to date)
+# and then starts the portal. A pipeline can run only the migration step: docker compose run --rm migrate
+name: access-review
+
+x-connection: &connection
+  ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=${POSTGRES_DB:-accessreview};Username=${POSTGRES_USER:-accessreview};Password=${POSTGRES_PASSWORD}"
+
+services:
+  db:
+    image: postgres:${POSTGRES_TAG:-18-alpine}
+    restart: unless-stopped
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    shm_size: 256mb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-accessreview}
+      POSTGRES_USER: ${POSTGRES_USER:-accessreview}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      # PostgreSQL 18 images keep the data in /var/lib/postgresql/18/docker: mount the parent folder.
+      - pgdata:/var/lib/postgresql
+      - ./deploy/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Only for administration from the Docker host (psql, pgAdmin, backups). Remove to keep the database internal.
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5435}:5432"
+
+  migrate:
+    build:
+      context: .
+      target: migrator
+    image: ${MIGRATOR_IMAGE:-access-review-migrator:local}
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *connection
+
+  web:
+    build:
+      context: .
+      target: runtime
+    image: ${PORTAL_IMAGE:-access-review-portal:local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      <<: *connection
+    ports:
+      - "${WEB_PORT:-8088}:${WEB_CONTAINER_PORT:-8443}"
+    volumes:
+      - ./certs:/https:ro
+
+volumes:
+  pgdata:

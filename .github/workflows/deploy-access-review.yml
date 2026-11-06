@@ -1,0 +1,253 @@
+# Access Review Automation Portal - build, test and deploy (sample pipeline, adapt it to your environment).
+#
+#   build      .NET 10 build and unit tests, EF Core migration bundle (efbundle), Docker images pushed to the registry
+#   deploy-db  PostgreSQL in a container on the VM (docker compose) or Azure Database for PostgreSQL Flexible Server (Bicep),
+#              then the schema migration (migration bundle image; safe to run many times)
+#   deploy-app the portal container on the VM (SSH + docker compose) or on Azure App Service (Web App for Containers)
+#
+# Runner: a self-hosted Linux runner with the labels below, with Docker and network access to the registry and the target VM.
+# See docs/GITHUB-RUNNER-SETUP.md for the step-by-step setup. Settings (Settings > Secrets and variables > Actions):
+#   variables: DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, DEPLOY_HOST_OS (windows | linux), PORTAL_URL, DEPLOY_KNOWN_HOSTS (optional)
+#   secrets:   DEPLOY_SSH_KEY (private key of the deploy user on the VM)
+#   registry:  default GitHub Container Registry (ghcr.io/<owner>, GITHUB_TOKEN). For another registry, for example Azure
+#              Container Registry, set the variables REGISTRY (myregistry.azurecr.io) and REGISTRY_USERNAME, and the secret
+#              REGISTRY_PASSWORD (for ACR: a repository-scoped token with content/write on the two repositories).
+#   Azure options only: variables AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_RESOURCE_GROUP, APPSERVICE_NAME,
+#                       PG_SERVER_NAME, PG_ADMIN_USER; secret PG_ADMIN_PASSWORD
+name: deploy-access-review
+
+on:
+  # Manual start only: a public fork has no self-hosted runner. After you set up your runner
+  # (docs/GITHUB-RUNNER-SETUP.md) you can add:
+  #   push:
+  #     branches: [main]
+  #     paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where the portal runs
+        type: choice
+        options: [ReservedVM_DockerCompose, Azure_AppService]
+        default: ReservedVM_DockerCompose
+      database:
+        description: Where the database runs
+        type: choice
+        options: [ContainerOnVM, AzurePostgreSQLFlexible]
+        default: ContainerOnVM
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: deploy-access-review
+  cancel-in-progress: false
+
+env:
+  TARGET: ${{ inputs.target || 'ReservedVM_DockerCompose' }}
+  DATABASE: ${{ inputs.database || 'ContainerOnVM' }}
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+  DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+  DEPLOY_HOST_OS: ${{ vars.DEPLOY_HOST_OS || 'linux' }}
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, access-review]
+    outputs:
+      portal_image: ${{ steps.names.outputs.portal_image }}
+      migrator_image: ${{ steps.names.outputs.migrator_image }}
+      registry: ${{ steps.names.outputs.registry }}
+      registry_user: ${{ steps.names.outputs.registry_user }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image names
+        id: names
+        env:
+          REGISTRY: ${{ vars.REGISTRY }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+        run: |
+          tag="${GITHUB_SHA::12}"
+          if [ -n "$REGISTRY" ]; then
+            prefix="${REGISTRY%/}"; registry="${prefix%%/*}"; user="$REGISTRY_USERNAME"
+          else
+            prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"; registry="ghcr.io"; user="$GITHUB_ACTOR"   # GHCR needs lower case
+          fi
+          {
+            echo "portal_image=${prefix}/access-review-portal:${tag}"
+            echo "migrator_image=${prefix}/access-review-migrator:${tag}"
+            echo "registry=${registry}"
+            echo "registry_user=${user}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore tools and packages
+        run: |
+          dotnet tool restore
+          dotnet restore AccessReviewPortal.slnx
+
+      - name: Unit tests
+        run: dotnet test AccessReviewPortal.slnx -c Release --no-restore --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+
+      - name: EF Core migration bundle (efbundle)
+        run: |
+          dotnet tool run dotnet-ef migrations bundle --project src/AccessReviewPortal/AccessReviewPortal.csproj \
+            --configuration Release --self-contained --target-runtime linux-x64 --output artifacts/efbundle --force
+          cp docker-compose.yml .env.example artifacts/
+          mkdir -p artifacts/deploy && cp -r deploy/postgres deploy/bicep artifacts/deploy/
+
+      # Archive of the bundle and test results. Not needed by the deploy jobs (they use the images), so a full
+      # artifact storage quota does not stop the pipeline.
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: deploy-bundle
+          path: |
+            artifacts/
+            TestResults/
+          retention-days: 14
+
+      - name: Build and push images
+        env:
+          PORTAL_IMAGE: ${{ steps.names.outputs.portal_image }}
+          MIGRATOR_IMAGE: ${{ steps.names.outputs.migrator_image }}
+          REGISTRY_HOST: ${{ steps.names.outputs.registry }}
+          REGISTRY_USER: ${{ steps.names.outputs.registry_user }}
+          REGISTRY_PASSWORD: ${{ vars.REGISTRY != '' && secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+          trap 'docker logout "$REGISTRY_HOST" >/dev/null 2>&1 || true' EXIT
+          docker build --target runtime  -t "$PORTAL_IMAGE"   -t "${PORTAL_IMAGE%:*}:latest" .
+          docker build --target migrator -t "$MIGRATOR_IMAGE" -t "${MIGRATOR_IMAGE%:*}:latest" .
+          for image in "$PORTAL_IMAGE" "${PORTAL_IMAGE%:*}:latest" "$MIGRATOR_IMAGE" "${MIGRATOR_IMAGE%:*}:latest"; do docker push "$image"; done
+
+  deploy-db:
+    needs: build
+    runs-on: [self-hosted, linux, access-review]
+    environment: production
+    env:
+      PORTAL_IMAGE: ${{ needs.build.outputs.portal_image }}
+      MIGRATOR_IMAGE: ${{ needs.build.outputs.migrator_image }}
+      REGISTRY: ${{ needs.build.outputs.registry }}
+      REGISTRY_USER: ${{ needs.build.outputs.registry_user }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- PostgreSQL in a container on the VM
+      - name: SSH key
+        if: env.DATABASE == 'ContainerOnVM'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          if [ -n "${{ vars.DEPLOY_KNOWN_HOSTS }}" ]; then printf '%s\n' "${{ vars.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          else ssh-keyscan -T 10 "$DEPLOY_HOST" > ~/.ssh/known_hosts 2>/dev/null; fi
+
+      - name: Copy deployment files to the VM
+        if: env.DATABASE == 'ContainerOnVM'
+        env:
+          REGISTRY_PASSWORD: ${{ vars.REGISTRY != '' && secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          dest="$DEPLOY_USER@$DEPLOY_HOST"
+          scp -i ~/.ssh/deploy_key docker-compose.yml "$dest:$DEPLOY_PATH/docker-compose.yml"
+          scp -i ~/.ssh/deploy_key deploy/postgres/postgresql.conf "$dest:$DEPLOY_PATH/deploy/postgres/postgresql.conf"
+          printf '%s' "$REGISTRY_PASSWORD" > registry.token
+          scp -i ~/.ssh/deploy_key registry.token "$dest:$DEPLOY_PATH/.registry-token" && rm -f registry.token
+
+      - name: Start PostgreSQL and run the migration bundle on the VM
+        if: env.DATABASE == 'ContainerOnVM'
+        run: bash deploy/scripts/remote-compose.sh "$REGISTRY_USER" "pull db migrate" "up -d db" "run --rm migrate"
+
+      # ---------------------------------------------------------------- Azure Database for PostgreSQL Flexible Server
+      - name: Azure login (OIDC)
+        if: env.DATABASE == 'AzurePostgreSQLFlexible'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy PostgreSQL Flexible Server (Bicep)
+        if: env.DATABASE == 'AzurePostgreSQLFlexible'
+        run: |
+          az deployment group create -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "access-review-postgres-${GITHUB_RUN_NUMBER}" \
+            -f deploy/bicep/postgres-flexible.bicep \
+            -p serverName="${{ vars.PG_SERVER_NAME }}" administratorLogin="${{ vars.PG_ADMIN_USER }}" \
+               administratorPassword="${{ secrets.PG_ADMIN_PASSWORD }}" --only-show-errors -o none
+
+      - name: Migrate the Flexible Server schema (migration bundle image)
+        if: env.DATABASE == 'AzurePostgreSQLFlexible'
+        env:
+          REGISTRY_PASSWORD: ${{ vars.REGISTRY != '' && secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+          ConnectionStrings__DefaultConnection: "Host=${{ vars.PG_SERVER_NAME }}.postgres.database.azure.com;Port=5432;Database=accessreview;Username=${{ vars.PG_ADMIN_USER }};Password=${{ secrets.PG_ADMIN_PASSWORD }};Ssl Mode=Require"
+        run: |
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          trap 'docker logout "$REGISTRY" >/dev/null 2>&1 || true' EXIT
+          docker run --rm -e ConnectionStrings__DefaultConnection "$MIGRATOR_IMAGE"
+
+  deploy-app:
+    needs: [build, deploy-db]
+    runs-on: [self-hosted, linux, access-review]
+    environment: production
+    env:
+      PORTAL_IMAGE: ${{ needs.build.outputs.portal_image }}
+      MIGRATOR_IMAGE: ${{ needs.build.outputs.migrator_image }}
+      REGISTRY: ${{ needs.build.outputs.registry }}
+      REGISTRY_USER: ${{ needs.build.outputs.registry_user }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- reserved VM with Docker
+      - name: SSH key and registry token
+        if: env.TARGET == 'ReservedVM_DockerCompose'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          REGISTRY_PASSWORD: ${{ vars.REGISTRY != '' && secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          if [ -n "${{ vars.DEPLOY_KNOWN_HOSTS }}" ]; then printf '%s\n' "${{ vars.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          else ssh-keyscan -T 10 "$DEPLOY_HOST" > ~/.ssh/known_hosts 2>/dev/null; fi
+          printf '%s' "$REGISTRY_PASSWORD" > registry.token
+          scp -i ~/.ssh/deploy_key registry.token "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.registry-token" && rm -f registry.token
+
+      - name: Roll out the portal container on the VM
+        if: env.TARGET == 'ReservedVM_DockerCompose'
+        env:
+          PERSIST_IMAGES: '1'
+        run: bash deploy/scripts/remote-compose.sh "$REGISTRY_USER" "pull web" "up -d --no-deps web"
+
+      # ---------------------------------------------------------------- Azure App Service (Web App for Containers)
+      - name: Azure login (OIDC)
+        if: env.TARGET == 'Azure_AppService'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy the container to App Service
+        if: env.TARGET == 'Azure_AppService'
+        env:
+          REGISTRY_PASSWORD: ${{ vars.REGISTRY != '' && secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          az webapp config container set -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ vars.APPSERVICE_NAME }}" \
+            --container-image-name "$PORTAL_IMAGE" --container-registry-url "https://$REGISTRY" \
+            --container-registry-user "$REGISTRY_USER" --container-registry-password "$REGISTRY_PASSWORD" -o none
+          az webapp config appsettings set -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ vars.APPSERVICE_NAME }}" -o none --settings \
+            WEBSITES_PORT=8080 ASPNETCORE_FORWARDEDHEADERS_ENABLED=true Database__ApplyMigrationsOnStartup=false
+          az webapp restart -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ vars.APPSERVICE_NAME }}"
+
+      # ---------------------------------------------------------------- smoke test
+      - name: Health check
+        env:
+          PORTAL_URL: ${{ vars.PORTAL_URL }}
+        run: bash deploy/scripts/health-check.sh

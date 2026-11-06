@@ -1,0 +1,370 @@
+@page "/groups"
+@page "/groups/{SnapshotId:int}"
+@inject SnapshotService Snapshots
+@inject GroupPermissionsService GroupPermissionsSvc
+@inject PendingChangesNotifier Notifier
+@inject NavigationManager Nav
+
+<PageTitle>Group Permissions</PageTitle>
+
+<h1 class="h4 mb-3">Group permissions &ndash; roles given to groups and how the members use them</h1>
+
+@if (snapshots.Count == 0)
+{
+    <div class="alert alert-secondary">No completed snapshots yet. Run a live scan on the <a href="">Snapshots &amp; Scan</a> page first.</div>
+}
+else
+{
+    <div class="row g-2 align-items-end mb-3">
+        <div class="col-md-4">
+            <label class="form-label">Snapshot</label>
+            <select class="form-select form-select-sm" value="@SnapshotId" @onchange="OnSnapshotChangedAsync">
+                @foreach (var s in snapshots)
+                {
+                    <option value="@s.Id">#@s.Id @s.Label (@s.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm"))</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Search</label>
+            <input class="form-control form-control-sm" placeholder="group, owner, role, scope" @bind="search" @bind:event="oninput" />
+        </div>
+        <div class="col-auto">
+            <div class="form-check mb-1">
+                <input class="form-check-input" type="checkbox" id="unusedOnly" @bind="onlyWithUnused" />
+                <label class="form-check-label small" for="unusedOnly">Only groups with unused members or movers</label>
+            </div>
+        </div>
+        <div class="col-auto ms-auto">
+            <a class="btn btn-sm btn-success" href="export/@SnapshotId/xlsx" download target="_top">Export Excel (incl. Group Permissions sheet)</a>
+        </div>
+    </div>
+
+    @if (notice is not null)
+    {
+        <div class="alert alert-info py-1 small">@notice</div>
+    }
+
+    <p class="small text-muted">
+        Every group that has at least one Entra ID role or Azure RBAC assignment (management group, subscription, resource group or resource).
+        Usage is counted for the last @threshold days: <em>active</em> members made changes or activated the role, <em>unused</em> members did nothing with the group's roles.
+        Click a group to see its roles and the usage of every member.
+    </p>
+
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-top">
+            <thead class="table-light">
+                <tr>
+                    <th>Group</th>
+                    <th>Source</th>
+                    <th>Owners</th>
+                    <th>Assigned roles</th>
+                    <th class="text-end">Members</th>
+                    <th class="text-end">Active (@threshold d)</th>
+                    <th class="text-end">Unused (@threshold d)</th>
+                    <th class="text-end">Movers / disabled</th>
+                    <th>Defender CSPM</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var g in Visible())
+                {
+                    <tr class="@(selected?.Group.GroupId == g.Group.GroupId ? "table-active" : "")" style="cursor: pointer" @onclick="() => Select(g)">
+                        <td>
+                            <div class="fw-semibold">@(g.Group.DisplayName ?? g.Group.GroupId)</div>
+                            <div class="small text-muted font-monospace">@g.Group.GroupId</div>
+                            @if (g.Group.IsAssignableToRole)
+                            {
+                                <span class="badge text-bg-light border" title="Role-assignable group: membership changes need Privileged Role Administrator">role-assignable</span>
+                            }
+                            @if (g.Group.ExpansionError is not null)
+                            {
+                                <div class="small text-danger">@g.Group.ExpansionError</div>
+                            }
+                        </td>
+                        <td class="small">@g.Source</td>
+                        <td class="small">@(string.IsNullOrWhiteSpace(g.Group.Owners) ? "no owners" : g.Group.Owners)</td>
+                        <td class="small">
+                            <strong>@g.Assignments.Count</strong>
+                            @foreach (var a in g.Assignments.Take(4))
+                            {
+                                <div>@a.GroupRow.RoleName &middot; @DisplayText.Of(a.GroupRow.ScopeLevel) @a.GroupRow.ScopeDisplayName &middot; @DisplayText.Of(a.GroupRow.AssignmentType)</div>
+                            }
+                            @if (g.Assignments.Count > 4)
+                            {
+                                <div class="text-muted">+@(g.Assignments.Count - 4) more</div>
+                            }
+                        </td>
+                        <td class="text-end">@g.TotalMembers</td>
+                        <td class="text-end">@g.ActiveMembers</td>
+                        <td class="text-end @(g.UnusedMembers > 0 ? "text-danger fw-semibold" : "")">@g.UnusedMembers</td>
+                        <td class="text-end @(g.MoversOrDisabled > 0 ? "text-danger fw-semibold" : "")">@g.MoversOrDisabled</td>
+                        <td class="small">
+                            @if (g.GroupDefenderFlags is not null)
+                            {
+                                <div>Group: @g.GroupDefenderFlags</div>
+                            }
+                            @if (g.DefenderFlaggedMembers > 0)
+                            {
+                                <div>Members flagged: @g.DefenderFlaggedMembers</div>
+                            }
+                            @if (g.GroupDefenderFlags is null && g.DefenderFlaggedMembers == 0)
+                            {
+                                <span class="text-muted">-</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    @if (groups.Count == 0)
+    {
+        <div class="alert alert-secondary small">No group has role assignments in this snapshot.</div>
+    }
+
+    @if (selected is not null)
+    {
+        <div class="card mb-4" id="group-card">
+            <div class="card-header d-flex align-items-center">
+                <div>
+                    <span class="fw-semibold">@(selected.Group.DisplayName ?? selected.Group.GroupId)</span>
+                    <span class="small text-muted ms-2">@selected.Source &middot; @selected.TotalMembers member(s) &middot; owners: @(string.IsNullOrWhiteSpace(selected.Group.Owners) ? "none" : selected.Group.Owners)</span>
+                </div>
+                <button class="btn btn-sm btn-outline-secondary ms-auto" @onclick="() => selected = null">Close</button>
+            </div>
+            <div class="card-body">
+                <ul class="nav nav-tabs mb-3">
+                    <li class="nav-item"><button class="nav-link @(tab == 0 ? "active" : "")" @onclick="() => tab = 0">Assigned Roles &amp; Scopes (@selected.Assignments.Count)</button></li>
+                    <li class="nav-item"><button class="nav-link @(tab == 1 ? "active" : "")" @onclick="() => tab = 1">Group Members Usage Matrix (@selected.Members.Count)</button></li>
+                </ul>
+
+                @if (tab == 0)
+                {
+                    <p class="small text-muted">
+                        You can mark the role assignment of the group itself for removal when no member used it (0 %).
+                        The decision appears on the Review page; you apply it on the <a href="changes">Changes Pending</a> page.
+                    </p>
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr><th>Role</th><th>Scope</th><th>Assignment</th><th class="text-end">Members</th><th class="text-end">Active</th><th class="text-end">Sign-in only</th><th class="text-end">Unused</th><th class="text-end">Usage</th><th>Defender CSPM</th><th>Decision</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in selected.Assignments)
+                            {
+                                var row = a.GroupRow;
+                                <tr>
+                                    <td>@row.RoleName @if (row.RoleHasWritePermissions) { <span class="badge text-bg-light border">write</span> }</td>
+                                    <td><span class="badge level-@row.ScopeLevel">@DisplayText.Of(row.ScopeLevel)</span> <span class="small" title="@row.ScopeId">@row.ScopeDisplayName</span></td>
+                                    <td class="small">@DisplayText.Of(row.AssignmentType)</td>
+                                    <td class="text-end">@a.Members</td>
+                                    <td class="text-end">@a.ActiveMembers</td>
+                                    <td class="text-end">@a.SignInOnlyMembers</td>
+                                    <td class="text-end">@a.UnusedMembers</td>
+                                    <td class="text-end fw-semibold @(a.UsagePercent == 0 ? "text-danger" : "")">@a.UsagePercent %</td>
+                                    <td class="small">@(row.DefenderCspmFindings ?? "-")</td>
+                                    <td class="small text-nowrap">
+                                        @if (row.ReviewerDecision == ReviewerDecision.Removed)
+                                        {
+                                            <span class="badge text-bg-danger">Approve Removal</span>
+                                            <button class="btn btn-sm btn-link" @onclick="() => SetGroupRowAsync(row, ReviewerDecision.Pending)">undo</button>
+                                            <div class="text-muted">@row.ReviewedByUpn @(row.RemediationStatus is null ? "" : "· " + row.RemediationStatus)</div>
+                                        }
+                                        else if (a.UsagePercent == 0)
+                                        {
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => SetGroupRowAsync(row, ReviewerDecision.Removed)">Mark for removal</button>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">@DisplayText.ReviewLabel(row.ReviewerDecision) (in use)</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (selected.Assignments.Count == 0)
+                    {
+                        <div class="small text-muted">The group has no direct role assignment in the scanned scopes (its members got access through a nested group).</div>
+                    }
+                }
+                else
+                {
+                    <div class="d-flex gap-2 align-items-center mb-2">
+                        <button class="btn btn-sm btn-outline-success" @onclick="AcceptMemberRecommendationsAsync">Accept recommendations for pending members</button>
+                        <span class="small text-muted">"Remove from Group" removes the member from the group in Entra ID (apply it on the Changes Pending page) and with it all roles of the group.</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-top">
+                            <thead>
+                                <tr><th>Member</th><th>Department</th><th>Manager</th><th>Mover status</th><th>@threshold d usage evidence</th><th>Defender CSPM</th><th>Recommendation</th><th style="min-width: 260px">Decision</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var m in selected.Members)
+                                {
+                                    var edit = MemberEdit(m);
+                                    <tr class="@(m.Decision?.Decision == GroupMemberDecisionType.RemoveFromGroup ? "row-removed" : m.RecommendedDecision == GroupMemberDecisionType.RemoveFromGroup ? "row-remove" : "")">
+                                        <td>
+                                            <div class="fw-semibold">@(m.DisplayName ?? m.MemberId)</div>
+                                            <div class="small text-muted">@(m.Upn ?? m.PrincipalType)</div>
+                                        </td>
+                                        <td class="small">@(m.Department ?? "-")</td>
+                                        <td class="small">@(m.Manager ?? "-")</td>
+                                        <td class="small @(m.IsMoverOrDisabled ? "text-danger" : "")">@m.MoverStatus</td>
+                                        <td class="small">
+                                            <span class="badge usage-@m.BestUsage">@m.BestUsage</span>
+                                            <div class="text-muted">@(m.LastUsedUtc is null ? "no activity found" : "last " + m.LastUsedUtc.Value.ToString("yyyy-MM-dd"))</div>
+                                        </td>
+                                        <td class="small">@(m.DefenderFlags ?? "-")</td>
+                                        <td class="small"><span class="badge @(m.RecommendedDecision == GroupMemberDecisionType.RemoveFromGroup ? "rec-Remove" : "rec-NoAction")">@DisplayText.Of(m.RecommendedDecision)</span><div>@m.RecommendationReason</div></td>
+                                        <td>
+                                            <div class="d-flex gap-1">
+                                                <select class="form-select form-select-sm" value="@edit.Decision" @onchange="e => edit.Decision = Enum.Parse<GroupMemberDecisionType>(e.Value?.ToString() ?? nameof(GroupMemberDecisionType.Pending))">
+                                                    <option value="@GroupMemberDecisionType.Pending">Pending</option>
+                                                    <option value="@GroupMemberDecisionType.KeepInGroup">Keep in Group</option>
+                                                    <option value="@GroupMemberDecisionType.RemoveFromGroup">Remove from Group</option>
+                                                </select>
+                                                <button class="btn btn-sm btn-outline-primary" @onclick="() => SaveMemberAsync(m)">Save</button>
+                                            </div>
+                                            <input class="form-control form-control-sm mt-1" placeholder="Comment" value="@edit.Comment" @onchange="e => edit.Comment = e.Value?.ToString()" />
+                                            @if (m.Decision is { Decision: not GroupMemberDecisionType.Pending } d)
+                                            {
+                                                <div class="small text-muted">@DisplayText.Of(d.Decision) by @d.ReviewedByUpn @d.ReviewedAtUtc?.ToString("yyyy-MM-dd HH:mm")</div>
+                                            }
+                                            @if (m.Decision?.RemediationStatus is not null)
+                                            {
+                                                <div class="small">@m.Decision.RemediationStatus</div>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+    [Parameter] public int SnapshotId { get; set; }
+    [SupplyParameterFromQuery(Name = "group")] public string? GroupQuery { get; set; }
+
+    private ClaimsPrincipal user = new();
+    private List<ScanSnapshot> snapshots = [];
+    private List<GroupSummary> groups = [];
+    private GroupSummary? selected;
+    private int tab;
+    private int threshold = 90;
+    private string search = "";
+    private bool onlyWithUnused;
+    private string? notice;
+    private readonly Dictionary<string, MemberEditState> edits = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed class MemberEditState
+    {
+        public GroupMemberDecisionType Decision { get; set; }
+        public string? Comment { get; set; }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        user = (await AuthState).User;
+        snapshots = (await Snapshots.GetSnapshotsAsync()).Where(s => s.Status == ScanStatus.Completed).ToList();
+        if (snapshots.Count == 0) return;
+        if (SnapshotId == 0 || snapshots.All(s => s.Id != SnapshotId))
+        {
+            SnapshotId = snapshots[0].Id;
+        }
+        await LoadAsync(GroupQuery);
+    }
+
+    private async Task LoadAsync(string? selectGroupId)
+    {
+        threshold = snapshots.FirstOrDefault(s => s.Id == SnapshotId)?.InactivityThresholdDays ?? 90;
+        groups = await GroupPermissionsSvc.GetGroupsAsync(SnapshotId);
+        edits.Clear();
+        selected = selectGroupId is null ? null : groups.FirstOrDefault(g => string.Equals(g.Group.GroupId, selectGroupId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private IEnumerable<GroupSummary> Visible()
+    {
+        IEnumerable<GroupSummary> q = groups;
+        if (onlyWithUnused) q = q.Where(g => g.UnusedMembers > 0 || g.MoversOrDisabled > 0);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            q = q.Where(g => Contains(g.Group.DisplayName, s) || Contains(g.Group.GroupId, s) || Contains(g.Group.Owners, s)
+                             || g.Assignments.Any(a => Contains(a.GroupRow.RoleName, s) || Contains(a.GroupRow.ScopeDisplayName, s))
+                             || g.Members.Any(m => Contains(m.DisplayName, s) || Contains(m.Upn, s)));
+        }
+        return q;
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+
+    private void Select(GroupSummary g)
+    {
+        selected = g;
+        tab = g.Assignments.Count == 0 ? 1 : 0;
+    }
+
+    private async Task OnSnapshotChangedAsync(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var id))
+        {
+            Nav.NavigateTo($"groups/{id}");
+            SnapshotId = id;
+            await LoadAsync(null);
+        }
+    }
+
+    private MemberEditState MemberEdit(GroupMemberInfo m)
+    {
+        if (!edits.TryGetValue(m.MemberId, out var state))
+        {
+            state = new MemberEditState { Decision = m.Decision?.Decision ?? GroupMemberDecisionType.Pending, Comment = m.Decision?.Comment };
+            edits[m.MemberId] = state;
+        }
+        return state;
+    }
+
+    private async Task SaveMemberAsync(GroupMemberInfo m)
+    {
+        var e = MemberEdit(m);
+        await Snapshots.SetMemberDecisionAsync(SnapshotId, selected!.Group.GroupId, m.MemberId, m.DisplayName, m.Upn, e.Decision, e.Comment, user.GetUpn());
+        notice = $"Saved: {m.DisplayName} in '{selected.Group.DisplayName}' -> {DisplayText.Of(e.Decision)}";
+        Notifier.Notify();
+        await LoadAsync(selected.Group.GroupId);
+        tab = 1;
+    }
+
+    private async Task AcceptMemberRecommendationsAsync()
+    {
+        var count = 0;
+        foreach (var m in selected!.Members.Where(m => m.Decision is null || m.Decision.Decision == GroupMemberDecisionType.Pending))
+        {
+            await Snapshots.SetMemberDecisionAsync(SnapshotId, selected.Group.GroupId, m.MemberId, m.DisplayName, m.Upn, m.RecommendedDecision,
+                m.RecommendationReason, user.GetUpn());
+            count++;
+        }
+        notice = $"Recommendations accepted for {count} member(s) of '{selected.Group.DisplayName}'.";
+        Notifier.Notify();
+        await LoadAsync(selected.Group.GroupId);
+        tab = 1;
+    }
+
+    private async Task SetGroupRowAsync(RoleAssignmentSnapshot row, ReviewerDecision decision)
+    {
+        await Snapshots.SetDecisionAsync(row.Id, decision,
+            decision == ReviewerDecision.Removed ? "Group Permissions view: no member used this role assignment" : null, user.GetUpn());
+        notice = decision == ReviewerDecision.Removed
+            ? $"Marked for removal: {row.RoleName} on {row.ScopeDisplayName} for group '{row.PrincipalDisplayName}'. Apply it on the Changes Pending page."
+            : $"Decision reset: {row.RoleName} on {row.ScopeDisplayName}.";
+        Notifier.Notify();
+        await LoadAsync(selected?.Group.GroupId);
+        tab = 0;
+    }
+}

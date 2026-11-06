@@ -1,0 +1,118 @@
+@implements IDisposable
+@inject SnapshotService Snapshots
+@inject PendingChangesNotifier Notifier
+@inject NavigationManager Navigation
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">Access Review Portal</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+@* On small screens the menu closes when a link is chosen, not when the Settings group is opened. *@
+<div class="nav-scrollable" onclick="if (event.target.closest('a')) document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Snapshots &amp; Scan
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="review">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Review
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="changes">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Changes Pending
+                @if (pending > 0)
+                {
+                    <span class="badge rounded-pill text-bg-warning ms-2">@pending</span>
+                }
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="groups">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Group Permissions
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="reports">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> KPI &amp; Reports
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <button type="button" class="nav-link nav-group" aria-expanded="@(settingsOpen ? "true" : "false")" aria-controls="settings-menu"
+                    @onclick="() => settingsOpen = !settingsOpen">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Settings
+                <span class="nav-chevron @(settingsOpen ? "open" : "")" aria-hidden="true"></span>
+            </button>
+            @if (settingsOpen)
+            {
+                <div id="settings-menu" class="nav-submenu">
+                    <NavLink class="nav-link" href="subscriptions">Subscriptions</NavLink>
+                    <NavLink class="nav-link" href="automation">Automation</NavLink>
+                    <NavLink class="nav-link" href="diagnostics">Diagnostics</NavLink>
+                </div>
+            }
+        </div>
+    </nav>
+</div>
+
+@code {
+    private static readonly string[] SettingsPages = ["subscriptions", "automation", "diagnostics"];
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private int pending;
+    private bool settingsOpen;
+
+    protected override async Task OnInitializedAsync()
+    {
+        settingsOpen = IsSettingsPage(Navigation.Uri);
+        Navigation.LocationChanged += OnLocationChanged;
+        Notifier.Changed += OnPendingChanged;
+        await RefreshAsync();
+    }
+
+    private bool IsSettingsPage(string uri)
+    {
+        var path = Navigation.ToBaseRelativePath(uri).Split('?', '#')[0].Split('/')[0];
+        return SettingsPages.Contains(path, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            var signedIn = AuthState is not null && (await AuthState).User.Identity?.IsAuthenticated == true;
+            pending = signedIn ? (await Snapshots.GetPendingCountsAsync()).Values.Sum() : 0;
+        }
+        catch (Exception)
+        {
+            // The badge is optional: never break the navigation.
+            pending = 0;
+        }
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        // Open the Settings group when one of its pages is shown; never close it on navigation.
+        if (IsSettingsPage(e.Location)) settingsOpen = true;
+        OnPendingChanged();
+    }
+
+    private void OnPendingChanged() => _ = InvokeAsync(async () =>
+    {
+        await RefreshAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose()
+    {
+        Navigation.LocationChanged -= OnLocationChanged;
+        Notifier.Changed -= OnPendingChanged;
+    }
+}

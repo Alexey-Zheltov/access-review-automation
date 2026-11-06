@@ -1,0 +1,42 @@
+@* Grafana-style gauge: 240° arc, threshold ring outside, value in the threshold colour. *@
+<div class="gf-panel gf-gauge">
+    <div class="gf-panel-title">
+        @Title
+        @if (Description is not null)
+        {
+            <span class="gf-info" title="@Description">i</span>
+        }
+    </div>
+    <svg viewBox="0 0 200 150" class="gf-gauge-svg" role="img" aria-label="@($"{Title}: {ChartMath.F(Percent)}%")">
+        @for (var i = 0; i < Thresholds.Count; i++)
+        {
+            var from = Math.Clamp(Thresholds[i].From, 0, 100);
+            var to = i + 1 < Thresholds.Count ? Math.Clamp(Thresholds[i + 1].From, 0, 100) : 100;
+            <path d="@ChartMath.Arc(Cx, Cy, 77, Angle(from), Angle(to))" stroke="@Thresholds[i].Color" stroke-width="4" fill="none" />
+        }
+        <path d="@ChartMath.Arc(Cx, Cy, 62, Start, Start + Sweep)" class="gf-gauge-track" stroke-width="16" fill="none" />
+        <path d="@ChartMath.Arc(Cx, Cy, 62, Start, Angle(Math.Clamp(Percent, 0, 100)))" stroke="@Color" stroke-width="16" fill="none" />
+        <text x="100" y="101" text-anchor="middle" class="gf-gauge-value" fill="@Color">@ChartMath.F(Math.Round(Percent))%</text>
+        @if (Label is not null)
+        {
+            <g><text x="100" y="143" text-anchor="middle" class="gf-gauge-label">@Label</text></g>
+        }
+    </svg>
+</div>
+
+@code {
+    private const double Cx = 100;
+    private const double Cy = 90;
+    private const double Start = 150;
+    private const double Sweep = 240;
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public double Percent { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public IReadOnlyList<Threshold> Thresholds { get; set; } = ChartMath.HighIsGood;
+
+    private string Color => ChartMath.ColorFor(Percent, Thresholds);
+
+    private static double Angle(double percent) => Start + Sweep * percent / 100;
+}

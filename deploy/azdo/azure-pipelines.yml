@@ -1,0 +1,303 @@
+# Access Review Automation Portal - Azure DevOps pipeline (sample, adapt it to your environment).
+#
+#   Build_Image_And_Bundle            .NET 10 build and unit tests, EF Core migration bundle (efbundle), images pushed to Azure Container Registry
+#   Deploy_And_Migrate_Database       PostgreSQL in a container on the VM, or Azure Database for PostgreSQL Flexible Server (Bicep);
+#                                     then the schema migration (efbundle; safe to run many times)
+#   Deploy_Container_Host_Or_AppService  the portal container on the VM (SSH + docker compose) or on Azure App Service
+#
+# Prerequisites (see INSTALL-GUIDE.md, section "Azure DevOps"):
+#   - agent pool with a Linux self-hosted agent that has Docker and network access to the registry and the target VM;
+#   - service connections: Docker registry (ACR) and Azure Resource Manager (workload identity federation);
+#   - variable group "access-review-deploy": DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, DEPLOY_HOST_OS (windows | linux), PORTAL_URL,
+#     and for the Azure options AZURE_RESOURCE_GROUP, APPSERVICE_NAME, PG_SERVER_NAME, PG_ADMIN_USER, PG_ADMIN_PASSWORD (secret);
+#   - secure file "access-review-deploy-key": private SSH key of the deploy user on the VM.
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    exclude: ['*.md', 'docs/*']
+
+pr: none
+
+parameters:
+  - name: target
+    displayName: Where the portal runs
+    type: string
+    default: ReservedVM_DockerCompose
+    values: [ReservedVM_DockerCompose, Azure_AppService]
+  - name: database
+    displayName: Where the database runs
+    type: string
+    default: ContainerOnVM
+    values: [ContainerOnVM, AzurePostgreSQLFlexible]
+  - name: agentPool
+    displayName: Agent pool (self-hosted, Linux, Docker)
+    type: string
+    default: my-self-hosted-pool
+  - name: registryConnection
+    displayName: Docker registry service connection (ACR)
+    type: string
+    default: my-acr-connection
+  - name: azureConnection
+    displayName: Azure Resource Manager service connection
+    type: string
+    default: my-azure-connection
+  - name: acrName
+    displayName: Azure Container Registry name
+    type: string
+    default: myregistry
+
+variables:
+  - group: access-review-deploy
+  - name: registry
+    value: ${{ parameters.acrName }}.azurecr.io
+  - name: PORTAL_IMAGE
+    value: $(registry)/access-review-portal:$(Build.BuildId)
+  - name: MIGRATOR_IMAGE
+    value: $(registry)/access-review-migrator:$(Build.BuildId)
+  - name: DOTNET_CLI_TELEMETRY_OPTOUT
+    value: '1'
+  - name: DOTNET_NOLOGO
+    value: '1'
+
+stages:
+  - stage: Build_Image_And_Bundle
+    displayName: Build image and migration bundle
+    jobs:
+      - job: build
+        displayName: Build, test, bundle, push
+        pool:
+          name: ${{ parameters.agentPool }}
+          demands:
+            - Agent.OS -equals Linux
+            - docker
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: .NET 10 SDK
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          - script: |
+              dotnet tool restore
+              dotnet restore AccessReviewPortal.slnx
+            displayName: Restore tools and packages
+
+          - script: dotnet test AccessReviewPortal.slnx -c Release --no-restore --logger trx --results-directory "$(Agent.TempDirectory)/TestResults"
+            displayName: Unit tests
+
+          - task: PublishTestResults@2
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: '**/*.trx'
+              searchFolder: $(Agent.TempDirectory)/TestResults
+
+          - script: |
+              dotnet tool run dotnet-ef migrations bundle --project src/AccessReviewPortal/AccessReviewPortal.csproj \
+                --configuration Release --self-contained --target-runtime linux-x64 --output "$(Build.ArtifactStagingDirectory)/efbundle" --force
+              cp docker-compose.yml .env.example "$(Build.ArtifactStagingDirectory)/"
+              mkdir -p "$(Build.ArtifactStagingDirectory)/deploy" && cp -r deploy/postgres deploy/bicep deploy/scripts "$(Build.ArtifactStagingDirectory)/deploy/"
+            displayName: EF Core migration bundle (efbundle)
+
+          - publish: $(Build.ArtifactStagingDirectory)
+            artifact: deploy-bundle
+            displayName: Publish deployment artifact
+
+          - task: Docker@2
+            displayName: Log in to the registry
+            inputs:
+              command: login
+              containerRegistry: ${{ parameters.registryConnection }}
+
+          - script: |
+              set -e
+              docker build --target runtime  -t "$(PORTAL_IMAGE)"   -t "$(registry)/access-review-portal:latest" .
+              docker build --target migrator -t "$(MIGRATOR_IMAGE)" -t "$(registry)/access-review-migrator:latest" .
+              for image in "$(PORTAL_IMAGE)" "$(registry)/access-review-portal:latest" "$(MIGRATOR_IMAGE)" "$(registry)/access-review-migrator:latest"; do
+                docker push "$image"
+              done
+            displayName: Build and push images
+
+          - task: Docker@2
+            displayName: Log out
+            condition: always()
+            inputs:
+              command: logout
+              containerRegistry: ${{ parameters.registryConnection }}
+
+  - stage: Deploy_And_Migrate_Database
+    displayName: Deploy and migrate the database
+    dependsOn: Build_Image_And_Bundle
+    jobs:
+      - job: database
+        displayName: Database (${{ parameters.database }})
+        pool:
+          name: ${{ parameters.agentPool }}
+          demands:
+            - Agent.OS -equals Linux
+            - docker
+        steps:
+          - checkout: self
+
+          - ${{ if eq(parameters.database, 'ContainerOnVM') }}:
+              - task: DownloadSecureFile@1
+                name: deployKey
+                displayName: Deploy SSH key
+                inputs:
+                  secureFile: access-review-deploy-key
+
+              # Docker@2 logs in with the registry service connection (workload identity) and stores a short-lived
+              # ACR token in its own DOCKER_CONFIG. The same token lets the VM pull; it is removed after the pull.
+              - task: Docker@2
+                displayName: Short-lived registry token for the VM
+                inputs:
+                  command: login
+                  containerRegistry: ${{ parameters.registryConnection }}
+
+              - script: |
+                  python3 - "$(registry)" > "$(Agent.TempDirectory)/registry.token" <<'PY'
+                  import base64, json, os, sys
+                  config = json.load(open(os.path.join(os.environ["DOCKER_CONFIG"], "config.json")))
+                  auth = config["auths"][sys.argv[1]]["auth"]
+                  print(base64.b64decode(auth).decode().split(":", 1)[1], end="")
+                  PY
+                displayName: Read the registry token
+
+              - task: Docker@2
+                displayName: Log out on the agent
+                inputs:
+                  command: logout
+                  containerRegistry: ${{ parameters.registryConnection }}
+
+              - script: |
+                  set -e
+                  mkdir -p ~/.ssh && chmod 700 ~/.ssh
+                  install -m 600 "$(deployKey.secureFilePath)" ~/.ssh/deploy_key
+                  ssh-keyscan -T 10 "$(DEPLOY_HOST)" > ~/.ssh/known_hosts 2>/dev/null
+                  dest="$(DEPLOY_USER)@$(DEPLOY_HOST)"
+                  scp -i ~/.ssh/deploy_key docker-compose.yml "$dest:$(DEPLOY_PATH)/docker-compose.yml"
+                  scp -i ~/.ssh/deploy_key deploy/postgres/postgresql.conf "$dest:$(DEPLOY_PATH)/deploy/postgres/postgresql.conf"
+                  scp -i ~/.ssh/deploy_key "$(Agent.TempDirectory)/registry.token" "$dest:$(DEPLOY_PATH)/.registry-token"
+                  rm -f "$(Agent.TempDirectory)/registry.token"
+                  REGISTRY="$(registry)" bash deploy/scripts/remote-compose.sh 00000000-0000-0000-0000-000000000000 \
+                    "pull db migrate" "up -d db" "run --rm migrate"
+                displayName: Start PostgreSQL and run the migration bundle on the VM
+                env:
+                  DEPLOY_HOST: $(DEPLOY_HOST)
+                  DEPLOY_USER: $(DEPLOY_USER)
+                  DEPLOY_PATH: $(DEPLOY_PATH)
+                  DEPLOY_HOST_OS: $(DEPLOY_HOST_OS)
+
+          - ${{ if eq(parameters.database, 'AzurePostgreSQLFlexible') }}:
+              - task: AzureCLI@2
+                displayName: Deploy PostgreSQL Flexible Server (Bicep)
+                inputs:
+                  azureSubscription: ${{ parameters.azureConnection }}
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    az deployment group create -g "$(AZURE_RESOURCE_GROUP)" -n "access-review-postgres-$(Build.BuildId)" \
+                      -f deploy/bicep/postgres-flexible.bicep \
+                      -p serverName="$(PG_SERVER_NAME)" administratorLogin="$(PG_ADMIN_USER)" administratorPassword="$PG_ADMIN_PASSWORD" \
+                      --only-show-errors -o none
+                env:
+                  PG_ADMIN_PASSWORD: $(PG_ADMIN_PASSWORD)
+
+              - download: current
+                artifact: deploy-bundle
+
+              - script: |
+                  chmod +x "$(Pipeline.Workspace)/deploy-bundle/efbundle"
+                  "$(Pipeline.Workspace)/deploy-bundle/efbundle"
+                displayName: Migrate the Flexible Server schema (efbundle)
+                env:
+                  ConnectionStrings__DefaultConnection: Host=$(PG_SERVER_NAME).postgres.database.azure.com;Port=5432;Database=accessreview;Username=$(PG_ADMIN_USER);Password=$(PG_ADMIN_PASSWORD);Ssl Mode=Require
+
+  - stage: Deploy_Container_Host_Or_AppService
+    displayName: Deploy the portal container
+    dependsOn: Deploy_And_Migrate_Database
+    jobs:
+      - job: app
+        displayName: Portal (${{ parameters.target }})
+        pool:
+          name: ${{ parameters.agentPool }}
+          demands:
+            - Agent.OS -equals Linux
+            - docker
+        steps:
+          - checkout: self
+
+          - ${{ if eq(parameters.target, 'ReservedVM_DockerCompose') }}:
+              - task: DownloadSecureFile@1
+                name: deployKey
+                displayName: Deploy SSH key
+                inputs:
+                  secureFile: access-review-deploy-key
+
+              # Docker@2 logs in with the registry service connection (workload identity) and stores a short-lived
+              # ACR token in its own DOCKER_CONFIG. The same token lets the VM pull; it is removed after the pull.
+              - task: Docker@2
+                displayName: Short-lived registry token for the VM
+                inputs:
+                  command: login
+                  containerRegistry: ${{ parameters.registryConnection }}
+
+              - script: |
+                  python3 - "$(registry)" > "$(Agent.TempDirectory)/registry.token" <<'PY'
+                  import base64, json, os, sys
+                  config = json.load(open(os.path.join(os.environ["DOCKER_CONFIG"], "config.json")))
+                  auth = config["auths"][sys.argv[1]]["auth"]
+                  print(base64.b64decode(auth).decode().split(":", 1)[1], end="")
+                  PY
+                displayName: Read the registry token
+
+              - task: Docker@2
+                displayName: Log out on the agent
+                inputs:
+                  command: logout
+                  containerRegistry: ${{ parameters.registryConnection }}
+
+              - script: |
+                  set -e
+                  mkdir -p ~/.ssh && chmod 700 ~/.ssh
+                  install -m 600 "$(deployKey.secureFilePath)" ~/.ssh/deploy_key
+                  ssh-keyscan -T 10 "$(DEPLOY_HOST)" > ~/.ssh/known_hosts 2>/dev/null
+                  scp -i ~/.ssh/deploy_key "$(Agent.TempDirectory)/registry.token" "$(DEPLOY_USER)@$(DEPLOY_HOST):$(DEPLOY_PATH)/.registry-token"
+                  rm -f "$(Agent.TempDirectory)/registry.token"
+                  REGISTRY="$(registry)" bash deploy/scripts/remote-compose.sh 00000000-0000-0000-0000-000000000000 \
+                    "pull web" "up -d --no-deps web"
+                displayName: Roll out the portal container on the VM
+                env:
+                  PERSIST_IMAGES: '1'
+                  DEPLOY_HOST: $(DEPLOY_HOST)
+                  DEPLOY_USER: $(DEPLOY_USER)
+                  DEPLOY_PATH: $(DEPLOY_PATH)
+                  DEPLOY_HOST_OS: $(DEPLOY_HOST_OS)
+
+          - ${{ if eq(parameters.target, 'Azure_AppService') }}:
+              - task: AzureCLI@2
+                displayName: Deploy the container to App Service
+                inputs:
+                  azureSubscription: ${{ parameters.azureConnection }}
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    # The App Service managed identity needs AcrPull on the registry (acrUseManagedIdentityCreds).
+                    az webapp config set -g "$(AZURE_RESOURCE_GROUP)" -n "$(APPSERVICE_NAME)" --generic-configurations '{"acrUseManagedIdentityCreds": true}' -o none
+                    az webapp config container set -g "$(AZURE_RESOURCE_GROUP)" -n "$(APPSERVICE_NAME)" \
+                      --container-image-name "$(PORTAL_IMAGE)" --container-registry-url "https://$(registry)" -o none
+                    az webapp config appsettings set -g "$(AZURE_RESOURCE_GROUP)" -n "$(APPSERVICE_NAME)" -o none --settings \
+                      WEBSITES_PORT=8080 ASPNETCORE_FORWARDEDHEADERS_ENABLED=true Database__ApplyMigrationsOnStartup=false
+                    az webapp restart -g "$(AZURE_RESOURCE_GROUP)" -n "$(APPSERVICE_NAME)"
+
+          - script: bash deploy/scripts/health-check.sh
+            displayName: Health check
+            env:
+              PORTAL_URL: $(PORTAL_URL)
+              DEPLOY_HOST: $(DEPLOY_HOST)
+              TARGET: ${{ parameters.target }}

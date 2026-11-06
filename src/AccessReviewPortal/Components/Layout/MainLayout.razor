@@ -1,0 +1,42 @@
+@inherits LayoutComponentBase
+@inject AccessReviewPortal.Services.Azure.AzureClients Azure
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4 justify-content-between">
+            <span class="text-muted small">Tenant: @(Azure.TenantId ?? "not configured") &middot; scanner: read-only service principal</span>
+            <AuthorizeView>
+                <Authorized>
+                    <span class="small">
+                        @context.User.GetDisplayName()
+                        <span class="text-muted">(@context.User.GetUpn(), @LoginText(context.User))</span>
+                        <a class="ms-3" href="/account/signout" target="_top">Sign out</a>
+                    </span>
+                </Authorized>
+            </AuthorizeView>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    private static string LoginText(ClaimsPrincipal user) => user.GetLoginMethod() switch
+    {
+        PortalClaims.LoginDeviceCode => "signed in with a code",
+        PortalClaims.LoginAccessKey => "access key, review only",
+        _ => "Entra ID"
+    };
+}
