@@ -138,12 +138,14 @@ For an organization runner (shared by several repositories), use **Organization 
 
 ## Step 4. Build the runner image
 
-The folder `deploy/github-runner` contains a small image based on the official runner image `ghcr.io/actions/actions-runner`. It adds `ssh`, `scp`, `curl` and `jq`. Copy the folder to the runner host and build it:
+The folder `deploy/github-runner` contains a small image based on the official runner image `ghcr.io/actions/actions-runner`. It adds `ssh`, `scp`, `curl`, `jq` and `zip`. Copy the folder to the runner host and build it:
 
 ```bash
 cd deploy/github-runner
 docker build -t access-review-runner:1 .
 ```
+
+For the App Service workflow (`.github/workflows/deploy-appservice.yml`), add Azure CLI to the image: `docker build --build-arg AZURE_CLI=true -t access-review-runner:1 .`. That workflow does not use Docker, so you can leave out the Docker socket in step 5. Setup of the workflow: [DEPLOY-AZURE-APP-SERVICE.md](DEPLOY-AZURE-APP-SERVICE.md#deploy-with-github-actions-optional).
 
 ## Step 5. Start the runner
 

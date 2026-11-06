@@ -4,7 +4,9 @@
 #
 # Sign-in to Azure: OpenID Connect with a user-assigned managed identity. No secret is stored in GitHub.
 # The identity needs the role "Website Contributor" on the web app, and a federated credential for this
-# repository and the environment "production".
+# repository and the environment "production". Copy the subject prefix from Settings > Actions > OIDC of the repository:
+#   repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:production   (repositories created or renamed after 15 July 2026)
+#   repo:<owner>/<repo>:environment:production                         (older repositories that did not switch to immutable subjects)
 #
 # Settings > Secrets and variables > Actions > Variables (repository or environment "production"):
 #   AZURE_CLIENT_ID        client id of the managed identity
@@ -15,7 +17,8 @@
 #   RUNNER_LABELS          optional, JSON list of runner labels. Default: ["self-hosted", "linux", "access-review"].
 #                          Set ["ubuntu-latest"] to use a GitHub-hosted runner.
 #
-# Runner tools: Azure CLI, curl, zip (GitHub-hosted Ubuntu runners have them). The .NET SDK is installed by the workflow.
+# Runner tools: Azure CLI, curl, zip. GitHub-hosted Ubuntu runners have them; for a self-hosted runner build the image
+# in deploy/github-runner with --build-arg AZURE_CLI=true. The .NET SDK is installed by the workflow.
 name: deploy-appservice
 
 on:
@@ -49,9 +52,9 @@ jobs:
       - name: Azure CLI folder for this job
         run: echo "AZURE_CONFIG_DIR=$RUNNER_TEMP/azure-cli" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -64,7 +67,7 @@ jobs:
           (cd publish && zip -qr ../portal.zip .)
 
       - name: Sign in to Azure (OpenID Connect)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}

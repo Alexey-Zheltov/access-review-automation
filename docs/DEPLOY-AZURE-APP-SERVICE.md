@@ -13,8 +13,9 @@ Contents
 7. [Step 5. Build and deploy the portal](#step-5-build-and-deploy-the-portal)
 8. [Step 6. Check the installation](#step-6-check-the-installation)
 9. [Step 7. Give access to the reviewers](#step-7-give-access-to-the-reviewers)
-10. [Update, client secret, removal](#update-client-secret-removal)
-11. [Troubleshooting](#troubleshooting)
+10. [Deploy with GitHub Actions (optional)](#deploy-with-github-actions-optional)
+11. [Update, client secret, removal](#update-client-secret-removal)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -251,6 +252,81 @@ Or with the script:
 
 The roles a reviewer needs to **apply** approved removals are in [INSTALL-GUIDE.md, section 2](../INSTALL-GUIDE.md#2-network-and-api-access).
 
+## Deploy with GitHub Actions (optional)
+
+The workflow `.github/workflows/deploy-appservice.yml` builds, tests and deploys the portal to the web app. It signs in to Azure with OpenID Connect (OIDC) and a user-assigned managed identity. No secret is stored in GitHub. Do steps 1 to 4 first. The workflow deploys only the code.
+
+You need **Admin** on the GitHub repository. The Azure rights are in [PERMISSIONS.md, section 8](PERMISSIONS.md#8-pipelines-optional).
+
+### Managed identity and federated credential
+
+Open the repository and copy the subject prefix from **Settings > Actions > OIDC**, field **Default subject claim prefix**.
+
+- Repositories created or renamed after 15 July 2026 use immutable subjects: `repo:<owner>@<owner_id>/<repo>@<repo_id>`.
+- Older repositories use `repo:<owner>/<repo>`, until you switch them to immutable subjects on the same page.
+
+The subject must match exactly. Otherwise the sign-in fails with `AADSTS70021` or `AADSTS700213` ("No matching federated identity record found").
+
+```powershell
+$repoSubject = 'repo:contoso@1234567/access-review@987654321'   # Settings > Actions > OIDC
+az identity create --resource-group $resourceGroup --name id-accessreview-github --location $location --output none
+az identity federated-credential create --resource-group $resourceGroup --identity-name id-accessreview-github `
+    --name github-production --issuer https://token.actions.githubusercontent.com `
+    --subject "${repoSubject}:environment:production" --audiences api://AzureADTokenExchange --output none
+
+$identity = az identity show --resource-group $resourceGroup --name id-accessreview-github --query "{clientId:clientId, principalId:principalId}" -o json | ConvertFrom-Json
+$siteId = az webapp show --resource-group $resourceGroup --name $appName --query id -o tsv
+az role assignment create --assignee-object-id $identity.principalId --assignee-principal-type ServicePrincipal `
+    --role 'Website Contributor' --scope $siteId --output none
+$identity.clientId
+```
+
+The template turns off basic authentication (FTP and SCM). The workflow does not need it: `az webapp deploy` uses the Microsoft Entra token of the identity.
+
+### GitHub environment and variables
+
+1. **Settings > Environments > New environment**, name `production`.
+2. **Deployment branches and tags**: choose **Selected branches and tags** and add the branch `main`.
+3. **Environment variables > Add environment variable**, for each row:
+
+| Name | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | client id of the managed identity (`$identity.clientId`) |
+| `AZURE_TENANT_ID` | `$tenantId` |
+| `AZURE_SUBSCRIPTION_ID` | `$subscriptionId` |
+| `AZURE_RESOURCE_GROUP` | `$resourceGroup` |
+| `APPSERVICE_NAME` | `$appName` |
+
+### Runner
+
+The workflow runs on a self-hosted runner with the labels `self-hosted`, `linux` and `access-review`. Build the runner image with Azure CLI, then start it with a registration token ([GITHUB-RUNNER-SETUP.md](GITHUB-RUNNER-SETUP.md), steps 3 to 6):
+
+```bash
+cd deploy/github-runner
+docker build --build-arg AZURE_CLI=true -t access-review-runner:1 .
+docker run -d --name access-review-runner --restart unless-stopped \
+  -e RUNNER_URL=https://github.com/<owner>/<repo> \
+  -e RUNNER_TOKEN=<registration token> \
+  -e RUNNER_NAME=access-review-runner-01 \
+  -e RUNNER_LABELS=access-review \
+  access-review-runner:1
+```
+
+This workflow does not use Docker, so the runner does not need the Docker socket. The runner needs outbound HTTPS to GitHub (see GITHUB-RUNNER-SETUP.md), `builds.dotnet.microsoft.com`, `api.nuget.org`, `login.microsoftonline.com`, `management.azure.com` and `<app-name>.scm.azurewebsites.net`.
+
+To use a GitHub-hosted runner instead, add the **repository** variable `RUNNER_LABELS` with the value `["ubuntu-latest"]` (**Settings > Secrets and variables > Actions > Variables**). The web app must then accept deployments from the internet, which is the case in both options of the template.
+
+### Run the workflow
+
+**Actions > deploy-appservice > Run workflow**, branch `main`. Or with GitHub CLI:
+
+```bash
+gh workflow run deploy-appservice.yml --repo <owner>/<repo> --ref main
+gh run watch --repo <owner>/<repo>
+```
+
+The first run takes about five minutes. The step **Health check** ends with "The portal answers". To deploy every push to `main`, add the `push` trigger at the top of the workflow file (see the comment there).
+
 ## Update, client secret, removal
 
 ### Update to a new version
@@ -263,6 +339,8 @@ az webapp deploy --resource-group $resourceGroup --name $appName --src-path arti
 ```
 
 On an existing web app the command waits until the new version runs (under one minute in the tests). The portal updates the database schema at the start. A scan that runs during the update is stopped and marked as failed. Run it again.
+
+With GitHub Actions, run the workflow `deploy-appservice` again instead.
 
 ### Renew the client secret
 
@@ -289,13 +367,14 @@ az role assignment delete --assignee $spId --scope "/providers/Microsoft.Managem
 az ad app delete --id $appId
 ```
 
-If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role assignments of the scanner on those scopes. A Key Vault with purge protection stays in the deleted state for 90 days.
+If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role assignments of the scanner on those scopes. A Key Vault with purge protection stays in the deleted state for 90 days. The managed identity of GitHub Actions is in the resource group and is deleted with it. Remove the runner as described in [GITHUB-RUNNER-SETUP.md](GITHUB-RUNNER-SETUP.md#remove-the-runner).
 
 ## Troubleshooting
 
 | Problem | Check |
 |---|---|
 | Deployment: `SkuNotAvailable` | The PostgreSQL size is not available for your subscription in this region. Choose another region or size (`postgresSkuName`, `postgresSkuTier`). |
+| Deployment: `Conflict` on the App Service plan, "No available instances to satisfy this request. App Service is attempting to increase capacity." | The region has no free capacity for this plan size at the moment. Run the deployment again some minutes later (the template is idempotent), or choose another plan size or region. |
 | Deployment: `RequestDisallowedByPolicy` | A policy blocks a resource or a setting. The message names the policy. See [PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy). |
 | Deployment: `AuthorizationFailed`, `LinkedAuthorizationFailed` | Rights at the scope in the message. See [PERMISSIONS.md, section 9](PERMISSIONS.md#9-errors-and-what-they-mean). |
 | `/healthz` returns 503 or times out | Read the start log of the portal: `az webapp log tail --resource-group $resourceGroup --name $appName`. "Database is not ready" means that the portal cannot reach PostgreSQL. "The database schema is not up to date" means that `Database__ApplyMigrationsOnStartup` is false. |
@@ -303,3 +382,6 @@ If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role
 | Sign-in fails | `AADSTS50011`: the address is not a redirect URI; run `setup-sp.ps1 -PortalUrl https://$appName.azurewebsites.net -SkipSecret`. More errors: [PERMISSIONS.md, section 9](PERMISSIONS.md#9-errors-and-what-they-mean). |
 | Diagnostics: a Graph or Azure check fails | Admin consent or a role of the scanner is missing. Run `setup-sp.ps1` again. |
 | The scan runs for a long time | Large tenants and busy subscriptions. See [SIZING.md](SIZING.md). |
+| GitHub Actions: the job stays "Waiting for a runner" | No online runner has all labels `self-hosted`, `linux`, `access-review`. Check **Settings > Actions > Runners**, or set `RUNNER_LABELS`. |
+| GitHub Actions: `AADSTS70021` or `AADSTS700213` in **Sign in to Azure** | The subject of the federated credential does not match. See [Managed identity and federated credential](#managed-identity-and-federated-credential). |
+| GitHub Actions: `AuthorizationFailed` in **Deploy to App Service** | The managed identity has no **Website Contributor** role on the web app, or the role is new: wait some minutes and run the workflow again. |

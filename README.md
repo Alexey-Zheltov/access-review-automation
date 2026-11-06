@@ -13,11 +13,11 @@ The portal works only with live data from Microsoft Graph, Azure Resource Manage
 
 | Guide | Content |
 |---|---|
-| [docs/DEPLOY-AZURE-APP-SERVICE.md](docs/DEPLOY-AZURE-APP-SERVICE.md) | Step by step: clone this repository and deploy it to Azure App Service with Azure Database for PostgreSQL |
+| [docs/DEPLOY-AZURE-APP-SERVICE.md](docs/DEPLOY-AZURE-APP-SERVICE.md) | Step by step: clone this repository and deploy it to Azure App Service with Azure Database for PostgreSQL, by hand or with GitHub Actions |
 | [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Rights of the person who sets up the portal, checks before you start, common errors |
 | [docs/SIZING.md](docs/SIZING.md) | Database and App Service size by number of subscriptions, role assignments and snapshots |
 | [INSTALL-GUIDE.md](INSTALL-GUIDE.md) | Docker on a VM, app registration details, pipelines, operations, troubleshooting |
-| [docs/GITHUB-RUNNER-SETUP.md](docs/GITHUB-RUNNER-SETUP.md) | Self-hosted GitHub runner for the VM pipeline |
+| [docs/GITHUB-RUNNER-SETUP.md](docs/GITHUB-RUNNER-SETUP.md) | Self-hosted GitHub runner for the VM pipeline and the App Service workflow |
 
 ---
 

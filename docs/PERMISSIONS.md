@@ -235,8 +235,10 @@ The id of the Tenant Root Group is the tenant id. Often nobody has a role there.
 
 | Task | Right |
 |---|---|
-| Add secrets, variables, environments, self-hosted runners | **Admin** on the repository (or the organization owner) |
+| Add secrets, variables, environments, self-hosted runners; read the OIDC subject prefix (**Settings > Actions > OIDC**) | **Admin** on the repository (or the organization owner) |
 | Federated credential for Azure (OIDC) on an app registration | Owner of that app registration, or Application Administrator |
+| User-assigned managed identity and its federated credential (`deploy-appservice.yml`) | **Managed Identity Contributor** (or Contributor) on the resource group |
+| Give the identity **Website Contributor** on the web app | **Role Based Access Control Administrator**, **User Access Administrator** or **Owner** on the web app or the resource group |
 | Deploy to App Service from the workflow | The workflow identity needs **Website Contributor** on the web app. For the Bicep deployment, the same rights as a person (section 1). |
 
 ### Azure DevOps
@@ -267,3 +269,4 @@ The id of the Tenant Root Group is the tenant id. Often nobody has a role there.
 | Sign-in: "Need admin approval" or `AADSTS65001` | Delegated permissions are not consented. | Run `setup-sp.ps1 -GrantDelegatedConsent -SkipSecret`, or **Grant admin consent** in the Entra admin center. |
 | Sign-in: `AADSTS50011` (redirect URI mismatch) | The portal address is not registered in the app registration. | `setup-sp.ps1 -PortalUrl https://<address> -SkipSecret`. |
 | Portal: "Access denied" after sign-in | The user has no portal role. | Assign `AccessReview.Reviewer` or `AccessReview.Admin` (section 1). |
+| GitHub Actions, step **Sign in to Azure**: `AADSTS70021` or `AADSTS700213`, "No matching federated identity record found for presented assertion" | The subject of the federated credential does not match the token of the run: other repository, other environment, or the old subject format without the immutable ids. | Compare the subject with **Settings > Actions > OIDC** of the repository and the environment name `production` ([DEPLOY-AZURE-APP-SERVICE.md](DEPLOY-AZURE-APP-SERVICE.md#deploy-with-github-actions-optional)). |
