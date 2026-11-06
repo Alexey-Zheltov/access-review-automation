@@ -11,8 +11,6 @@ portal (**Keep** / **Approve Removal**), export the review workbook (Excel), and
 Stack: .NET 10 (ASP.NET Core Blazor, Interactive Server), PostgreSQL 18, Docker Compose.
 The portal works only with live data from Microsoft Graph, Azure Resource Manager and Azure Resource Graph. There is no mock data.
 
-This repository is a **sample**. It is not a supported product. Test it and adapt it to your environment and your rules before you use it with production data.
-
 | Guide | Content |
 |---|---|
 | [docs/DEPLOY-AZURE-APP-SERVICE.md](docs/DEPLOY-AZURE-APP-SERVICE.md) | Step by step: clone this repository and deploy it to Azure App Service with Azure Database for PostgreSQL |

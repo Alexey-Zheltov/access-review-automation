@@ -2,8 +2,6 @@
 
 This guide installs the portal from this repository into your Azure subscription. You run every step yourself from a PowerShell 7 window. A first installation takes about 30 minutes.
 
-The portal is a **sample**. Test it and adapt it to your environment, your security rules and your change process before you use it with production data.
-
 Contents
 
 1. [What you deploy](#1-what-you-deploy)
