@@ -237,11 +237,11 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
 
 ### For all options
 
-The deployment takes about 8 minutes for the quick start and about 11 minutes for the private network option. PostgreSQL takes most of the time. With your own server (option C) it takes a few minutes.
+The deployment takes about 10 minutes for the quick start and a few minutes more for the private network option. PostgreSQL takes most of the time. With your own server (option C) it takes a few minutes.
 
 - To see the planned changes first, run the same command with `az deployment group what-if` instead of `az deployment group create`.
 - To connect to the quick start database from your computer (psql, pgAdmin), add `administratorClientIp=<your public IP>`.
-- Managed identity: the server accepts only Microsoft Entra sign-in. To connect yourself, make your account (or a group) a second Microsoft Entra administrator, then use a token as the password:
+- Managed identity: the server accepts only Microsoft Entra sign-in. To connect yourself, make your account (or a group) a second Microsoft Entra administrator, then use a token as the password. A Microsoft Entra administrator can read and change all tables of the portal, so remove the entry when you no longer need it:
 
   ```powershell
   $me = az ad signed-in-user show --query "{id:id, upn:userPrincipalName}" -o json | ConvertFrom-Json
@@ -249,6 +249,10 @@ The deployment takes about 8 minutes for the quick start and about 11 minutes fo
       --display-name $me.upn --object-id $me.id --type User
   $env:PGPASSWORD = az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv
   psql "host=$postgresName.postgres.database.azure.com dbname=accessreview user=$($me.upn) sslmode=require"
+
+  # later
+  az postgres flexible-server microsoft-entra-admin delete --resource-group $resourceGroup --server-name $postgresName `
+      --object-id $me.id --yes
   ```
 
 - Other parameters (sizes, PostgreSQL version, storage) are described at the top of `deploy/bicep/appservice.bicep`.

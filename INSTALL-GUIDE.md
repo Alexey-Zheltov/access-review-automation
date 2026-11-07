@@ -262,7 +262,7 @@ By default the database runs in the container `db` on the same VM. To use anothe
    docker compose up -d --no-deps web
    ```
 
-The pipelines with `database=AzurePostgreSQLFlexible` (section 6) also use `DB_CONNECTION_STRING` from `.env` on the VM. The firewall of the server must allow the VM.
+The pipelines use `DB_CONNECTION_STRING` from `.env` on the VM too. With `database=ContainerOnVM` they still start the container `db`, but the portal and the migrate step use your server. With `database=AzurePostgreSQLFlexible` (section 6), point `DB_CONNECTION_STRING` to the Flexible Server. The firewall of the server must allow the VM.
 
 ### DNS
 
