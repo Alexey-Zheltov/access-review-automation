@@ -7,6 +7,8 @@
 //
 // Network: either public access with firewall rules (default) or private access in a delegated subnet
 // (set delegatedSubnetResourceId and privateDnsZoneArmResourceId).
+// Sign-in: password (administratorLogin / administratorPassword) and/or Microsoft Entra ID. With passwordAuth = false the server
+// accepts only Microsoft Entra tokens; entraAdministrators sets who administers it (for example a managed identity).
 
 @description('Server name (globally unique, lower case).')
 param serverName string
@@ -17,10 +19,18 @@ param location string = resourceGroup().location
 @allowed(['16', '17', '18'])
 param postgresVersion string = '18'
 
-param administratorLogin string
+@description('Administrator login. Only with passwordAuth = true.')
+param administratorLogin string = ''
 
+@description('Administrator password. Only with passwordAuth = true.')
 @secure()
-param administratorPassword string
+param administratorPassword string = ''
+
+@description('Sign-in with administratorLogin and administratorPassword. false = Microsoft Entra authentication only.')
+param passwordAuth bool = true
+
+@description('Microsoft Entra administrators of the server: objects { objectId, principalName, principalType (User, Group or ServicePrincipal) }.')
+param entraAdministrators array = []
 
 @description('Compute size. Standard_D2ds_v5 (2 vCores, 8 GB) is enough for tens of thousands of assignments per scan; use D4ds_v5 for very large tenants.')
 param skuName string = 'Standard_D2ds_v5'
@@ -59,6 +69,7 @@ param tags object = {
 }
 
 var privateAccess = !empty(delegatedSubnetResourceId)
+var entraAuth = enableEntraAuth || !passwordAuth
 
 // Server parameters for scan-heavy workloads: bulk inserts in chunks, large filtered queries, bulk deletes of old snapshots.
 // shared_buffers and effective_cache_size are set by the service from the compute size.
@@ -84,8 +95,8 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
   }
   properties: {
     version: postgresVersion
-    administratorLogin: administratorLogin
-    administratorLoginPassword: administratorPassword
+    administratorLogin: passwordAuth ? administratorLogin : null
+    administratorLoginPassword: passwordAuth ? administratorPassword : null
     storage: {
       storageSizeGB: storageSizeGB
       autoGrow: 'Enabled'
@@ -107,9 +118,9 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
           publicNetworkAccess: 'Enabled'
         }
     authConfig: {
-      activeDirectoryAuth: enableEntraAuth ? 'Enabled' : 'Disabled'
-      passwordAuth: 'Enabled'
-      tenantId: enableEntraAuth ? subscription().tenantId : null
+      activeDirectoryAuth: entraAuth ? 'Enabled' : 'Disabled'
+      passwordAuth: passwordAuth ? 'Enabled' : 'Disabled'
+      tenantId: entraAuth ? subscription().tenantId : null
     }
   }
 }
@@ -134,6 +145,21 @@ resource parameters 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@20
       source: 'user-override'
     }
     dependsOn: [database]
+  }
+]
+
+// Microsoft Entra administrators (for example the managed identity of the web app), after the server parameters.
+@batchSize(1)
+resource administrators 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2025-08-01' = [
+  for a in entraAdministrators: {
+    parent: server
+    name: a.objectId
+    properties: {
+      principalName: a.principalName
+      principalType: a.principalType
+      tenantId: subscription().tenantId
+    }
+    dependsOn: [parameters]
   }
 ]
 

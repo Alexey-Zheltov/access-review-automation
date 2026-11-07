@@ -14,6 +14,14 @@
 //       with a user-assigned managed identity that gets "Key Vault Secrets User" before the web app exists
 //     - a new VNet and new private DNS zones, or your existing subnets and DNS zones (for example in a hub subscription)
 //
+// Database (databaseServer):
+//   AzurePostgreSQL (default) - the template creates Azure Database for PostgreSQL Flexible Server and the database accessreview.
+//     databaseAuthentication = ManagedIdentity (default): the user-assigned identity id-<appName> is the Microsoft Entra
+//       administrator of this server and the portal signs in with it; the server accepts no passwords.
+//     databaseAuthentication = Password: the portal signs in with the administrator login and password.
+//   ExistingServer - your own PostgreSQL server, for example on a VM on-premises or in Azure. Give existingServerConnectionString
+//     (login and password). Use privateNetwork = true with an existing subnet that has a network path to the server.
+//
 // Rights of the deploying user: docs/PERMISSIONS.md.
 
 @description('Web app name. The portal address is https://<appName>.azurewebsites.net. Must be globally unique.')
@@ -37,14 +45,29 @@ param clientId string
 @secure()
 param clientSecret string
 
-@description('PostgreSQL server name (globally unique, lower case).')
-param postgresServerName string
+@description('AzurePostgreSQL: the template creates Azure Database for PostgreSQL Flexible Server. ExistingServer: your own PostgreSQL server, for example on a VM; the template creates no database server.')
+@allowed(['AzurePostgreSQL', 'ExistingServer'])
+param databaseServer string = 'AzurePostgreSQL'
+
+@description('AzurePostgreSQL only. ManagedIdentity: the portal signs in with its managed identity (Microsoft Entra), no password. Password: administrator login and password.')
+@allowed(['ManagedIdentity', 'Password'])
+param databaseAuthentication string = 'ManagedIdentity'
+
+@description('ExistingServer only: connection string with login and password, for example Host=pg01.contoso.com;Port=5432;Database=accessreview;Username=accessreview;Password=<password>;Ssl Mode=VerifyFull')
+@secure()
+param existingServerConnectionString string = ''
+
+@description('ExistingServer only, optional: CA certificate of the server (base64 of the .cer file, or PEM) when the server certificate comes from your own CA. Needed for Ssl Mode=VerifyFull.')
+param existingServerCaCertificate string = ''
+
+@description('AzurePostgreSQL only: server name (globally unique, lower case).')
+param postgresServerName string = 'psql-${appName}'
 
 param postgresAdminLogin string = 'accessreviewadmin'
 
-@description('Administrator password of the PostgreSQL server. Do not use ; or quotes.')
+@description('AzurePostgreSQL with Password only: administrator password of the server. Do not use ; or quotes.')
 @secure()
-param postgresAdminPassword string
+param postgresAdminPassword string = ''
 
 @description('PostgreSQL compute size. See docs/SIZING.md.')
 param postgresSkuName string = 'Standard_B2s'
@@ -96,13 +119,18 @@ param tags object = {
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var portalUrl = 'https://${appName}.azurewebsites.net'
 var databaseName = 'accessreview'
+var createPostgres = databaseServer == 'AzurePostgreSQL'
+var useManagedIdentity = createPostgres && databaseAuthentication == 'ManagedIdentity'
+// The user-assigned identity reads Key Vault (private network) and signs in to PostgreSQL (managed identity).
+var useIdentity = privateNetwork || useManagedIdentity
+var identityName = 'id-${appName}'
 var createVnet = privateNetwork && empty(appSubnetResourceId)
 var vnetName = 'vnet-${appName}'
 var appSubnetId = createVnet ? resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'snet-app') : appSubnetResourceId
 var postgresSubnetId = createVnet ? resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'snet-postgres') : postgresSubnetResourceId
 var endpointSubnetId = createVnet ? resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, 'snet-private-endpoints') : privateEndpointSubnetResourceId
 var vnetId = createVnet ? resourceId('Microsoft.Network/virtualNetworks', vnetName) : (privateNetwork ? split(appSubnetResourceId, '/subnets/')[0] : '')
-var createPostgresZone = privateNetwork && empty(postgresPrivateDnsZoneResourceId)
+var createPostgresZone = privateNetwork && createPostgres && empty(postgresPrivateDnsZoneResourceId)
 var createVaultZone = privateNetwork && empty(keyVaultPrivateDnsZoneResourceId)
 var postgresZoneName = '${postgresServerName}.private.postgres.database.azure.com'
 var postgresZoneId = createPostgresZone ? postgresZone.id : postgresPrivateDnsZoneResourceId
@@ -181,8 +209,15 @@ resource vaultZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@20
   dependsOn: [vnet]
 }
 
+// ------------------------------------------------------------------------------------------------ identity of the web app
+resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (useIdentity) {
+  name: identityName
+  location: location
+  tags: tags
+}
+
 // ------------------------------------------------------------------------------------------------ database
-module postgres 'postgres-flexible.bicep' = {
+module postgres 'postgres-flexible.bicep' = if (createPostgres) {
   name: 'postgres-${uniqueString(postgresServerName)}'
   params: {
     serverName: postgresServerName
@@ -190,6 +225,11 @@ module postgres 'postgres-flexible.bicep' = {
     postgresVersion: postgresVersion
     administratorLogin: postgresAdminLogin
     administratorPassword: postgresAdminPassword
+    // Managed identity: Microsoft Entra sign-in only; the identity of the web app administers this server.
+    passwordAuth: !useManagedIdentity
+    entraAdministrators: useManagedIdentity
+      ? [{ objectId: identity!.properties.principalId, principalName: identityName, principalType: 'ServicePrincipal' }]
+      : []
     skuName: postgresSkuName
     skuTier: postgresSkuTier
     storageSizeGB: postgresStorageSizeGB
@@ -203,15 +243,14 @@ module postgres 'postgres-flexible.bicep' = {
   dependsOn: [vnet, postgresZoneLink]
 }
 
-var connectionString = 'Host=${postgres.outputs.fqdn};Port=5432;Database=${databaseName};Username=${postgresAdminLogin};Password=${postgresAdminPassword};Ssl Mode=VerifyFull'
+var postgresHost = createPostgres ? postgres!.outputs.fqdn : ''
+var connectionString = !createPostgres
+  ? existingServerConnectionString
+  : useManagedIdentity
+      ? 'Host=${postgresHost};Port=5432;Database=${databaseName};Username=${identityName};Ssl Mode=VerifyFull'
+      : 'Host=${postgresHost};Port=5432;Database=${databaseName};Username=${postgresAdminLogin};Password=${postgresAdminPassword};Ssl Mode=VerifyFull'
 
 // ------------------------------------------------------------------------------------------------ secrets (private mode)
-resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (privateNetwork) {
-  name: 'id-${appName}'
-  location: location
-  tags: tags
-}
-
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = if (privateNetwork) {
   name: keyVaultName
   location: location
@@ -319,7 +358,7 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
   location: location
   tags: tags
   kind: 'app,linux'
-  identity: privateNetwork
+  identity: useIdentity
     ? {
         type: 'UserAssigned'
         userAssignedIdentities: {
@@ -360,6 +399,9 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     ASPNETCORE_FORWARDEDHEADERS_ENABLED: 'true'
     // One instance: the schema is migrated when the app starts.
     Database__ApplyMigrationsOnStartup: 'true'
+    Database__Authentication: useManagedIdentity ? 'ManagedIdentity' : 'Password'
+    Database__ManagedIdentityClientId: useManagedIdentity ? identity!.properties.clientId : ''
+    Database__RootCertificate: createPostgres ? '' : existingServerCaCertificate
     Authentication__Mode: 'EntraId'
     Portal__PublicBaseUrl: portalUrl
     AzureAd__TenantId: tenantId
@@ -409,6 +451,8 @@ resource ftpBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@20
 
 output portalUrl string = portalUrl
 output webAppName string = webApp.name
-output postgresFqdn string = postgres.outputs.fqdn
+output postgresFqdn string = postgresHost
+@description('User name of the portal in PostgreSQL. Managed identity: the identity name.')
+output postgresUser string = useManagedIdentity ? identityName : (createPostgres ? postgresAdminLogin : '')
 output keyVaultName string = privateNetwork ? keyVaultName : ''
 output outboundIpAddresses string = webApp.properties.outboundIpAddresses

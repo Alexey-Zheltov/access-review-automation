@@ -112,6 +112,27 @@ public sealed class DatabaseOptions
 
     /// <summary>Rows per INSERT batch when a scan is saved.</summary>
     public int InsertChunkSize { get; set; } = 2000;
+
+    /// <summary>
+    /// Password: user name and password in the connection string. ManagedIdentity: the portal signs in to
+    /// Azure Database for PostgreSQL with a Microsoft Entra token of its managed identity; the connection string has no password.
+    /// </summary>
+    public DatabaseAuthentication Authentication { get; set; } = DatabaseAuthentication.Password;
+
+    /// <summary>ManagedIdentity: client ID of the user-assigned managed identity. Empty = system-assigned identity.</summary>
+    public string? ManagedIdentityClientId { get; set; }
+
+    /// <summary>
+    /// Optional CA certificate for Ssl Mode=VerifyFull with a server whose certificate comes from your own CA, for example
+    /// PostgreSQL on a VM: the certificate as PEM text or base64, or the path of a DER or PEM file.
+    /// </summary>
+    public string? RootCertificate { get; set; }
+}
+
+public enum DatabaseAuthentication
+{
+    Password,
+    ManagedIdentity
 }
 
 public sealed class DiscoveryOptions

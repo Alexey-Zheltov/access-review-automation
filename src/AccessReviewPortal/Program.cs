@@ -34,7 +34,10 @@ var authorizationOptions = builder.Configuration.GetSection(PortalAuthorizationO
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("ConnectionStrings__DefaultConnection is not configured.");
-builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(connectionString));
+var databaseOptions = builder.Configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>() ?? new DatabaseOptions();
+var dataSource = DatabaseDataSource.Build(connectionString, databaseOptions);
+builder.Services.AddSingleton(dataSource);
+builder.Services.AddDbContextFactory<AppDbContext>(o => o.UseNpgsql(dataSource));
 builder.Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
 
 builder.Services.AddHttpClient("arm", c => c.Timeout = TimeSpan.FromMinutes(2));

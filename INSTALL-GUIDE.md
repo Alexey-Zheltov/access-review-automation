@@ -235,6 +235,35 @@ For a build on the VM itself, copy the whole repository. For a deployment from a
 
 The image tag is `postgres:${POSTGRES_TAG:-18-alpine}`. A pipeline run pulls the newest 18.x patch image and recreates the database container (the data stays on the volume). To update PostgreSQL only when you plan it, pin the version in `.env`, for example `POSTGRES_TAG=18.6-alpine`.
 
+### External PostgreSQL server
+
+By default the database runs in the container `db` on the same VM. To use another PostgreSQL server (version 16 or later), for example on a separate VM:
+
+1. The database administrator creates the login and the database. The login owns the database, so the migrate step can create the tables:
+
+   ```sql
+   CREATE ROLE accessreview LOGIN PASSWORD '<password>';
+   CREATE DATABASE accessreview OWNER accessreview;
+   ```
+
+2. The server accepts the portal VM over TLS, for example with this line in `pg_hba.conf`:
+   `hostssl accessreview accessreview <IP of the portal VM>/32 scram-sha-256`
+3. In `.env`, set `DB_CONNECTION_STRING`. `POSTGRES_PASSWORD` still needs a value, because `docker-compose.yml` reads it:
+
+   ```
+   DB_CONNECTION_STRING=Host=pg01.contoso.com;Port=5432;Database=accessreview;Username=accessreview;Password=<password>;Ssl Mode=VerifyFull
+   ```
+
+   If the server certificate comes from your own CA, copy the CA certificate (PEM) to `certs/db-ca.crt` and add `;Root Certificate=/https/db-ca.crt` to the connection string. `Ssl Mode=Require` encrypts the connection but does not check the server certificate.
+4. Start without the container `db`:
+
+   ```bash
+   docker compose run --rm --no-deps migrate
+   docker compose up -d --no-deps web
+   ```
+
+The pipelines with `database=AzurePostgreSQLFlexible` (section 6) also use `DB_CONNECTION_STRING` from `.env` on the VM. The firewall of the server must allow the VM.
+
 ### DNS
 
 The portal name must resolve to the VM for the reviewers and for the pipeline health check. If your internal DNS hosts its own copy of the zone (split-horizon, for example an Active Directory integrated zone), add the record there too, not only in the public zone. The pipelines connect to the VM directly for the health check (`deploy/scripts/health-check.sh`), so they do not depend on DNS.
@@ -288,7 +317,7 @@ Start it by hand. In this repository the workflow has no push trigger, because a
 gh workflow run deploy-access-review.yml -f target=ReservedVM_DockerCompose -f database=ContainerOnVM
 ```
 
-For `Azure_AppService` / `AzurePostgreSQLFlexible`, add the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (federated credential for GitHub OIDC), `AZURE_RESOURCE_GROUP`, `APPSERVICE_NAME`, `PG_SERVER_NAME`, `PG_ADMIN_USER` and the secret `PG_ADMIN_PASSWORD`. App Service keeps the registry credentials, so use a registry user with a long-lived pull right (variables `REGISTRY`, `REGISTRY_USERNAME`, secret `REGISTRY_PASSWORD`), or Azure Container Registry with the managed identity of the web app.
+For `Azure_AppService` / `AzurePostgreSQLFlexible`, add the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (federated credential for GitHub OIDC), `AZURE_RESOURCE_GROUP`, `APPSERVICE_NAME`, `PG_SERVER_NAME`, `PG_ADMIN_USER` and the secret `PG_ADMIN_PASSWORD`. With `ReservedVM_DockerCompose` and `AzurePostgreSQLFlexible`, also set `DB_CONNECTION_STRING` in `.env` on the VM ([External PostgreSQL server](#external-postgresql-server)). App Service keeps the registry credentials, so use a registry user with a long-lived pull right (variables `REGISTRY`, `REGISTRY_USERNAME`, secret `REGISTRY_PASSWORD`), or Azure Container Registry with the managed identity of the web app.
 
 The registry is GitHub Container Registry by default. To use Azure Container Registry, set `REGISTRY`, `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` (see the runner guide, "Container registry").
 

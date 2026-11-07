@@ -45,7 +45,8 @@ Contents
 | Deploy `deploy/bicep/appservice.bicep`, quick start | Resource group | **Contributor** on the resource group. |
 | Deploy `deploy/bicep/appservice.bicep`, private network | Resource group, plus the network if it is not in this resource group | **Contributor** and **Role Based Access Control Administrator** (or Owner) on the resource group: the template gives the role `Key Vault Secrets User` to the identity of the web app. With an existing network or existing DNS zones, also the rights in section 4. |
 | Deploy the code (`az webapp deploy`) | Web app | **Website Contributor** on the web app, or Contributor on the resource group. |
-| Read the scan data in PostgreSQL | Database | The administrator login from the deployment. No Azure role is needed. |
+| Read the scan data in PostgreSQL | Database | Managed identity (default): your account or a group as a second Microsoft Entra administrator of the server, which needs **Contributor** on the server ([DEPLOY-AZURE-APP-SERVICE.md, step 4](DEPLOY-AZURE-APP-SERVICE.md#for-all-options)). Password: the administrator login from the deployment. Your own server: a login from your database administrator. |
+| Your own PostgreSQL server (`databaseServer=ExistingServer`) | The PostgreSQL server | A database administrator who can create a login and a database and change `pg_hba.conf`. No Azure role. |
 
 ### Reviewers
 
@@ -177,7 +178,8 @@ Before the session, agree with the network team:
 
 - the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger);
 - who adds the DNS records if you get no rights on the hub zones;
-- outbound internet access from the app subnet (firewall rules for `login.microsoftonline.com`, `graph.microsoft.com`, `management.azure.com`, `api.loganalytics.io`). With the private network option, all outbound traffic of the web app goes through the virtual network.
+- outbound internet access from the app subnet (firewall rules for `login.microsoftonline.com`, `graph.microsoft.com`, `management.azure.com`, `api.loganalytics.io`). With the private network option, all outbound traffic of the web app goes through the virtual network;
+- with your own PostgreSQL server: the network path from the app subnet to the server on port 5432 (routes, firewalls, intrusion detection on VPN devices).
 
 ## 5. Azure Policy
 

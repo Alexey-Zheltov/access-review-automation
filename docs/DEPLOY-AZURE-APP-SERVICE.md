@@ -27,7 +27,7 @@ Contents
                                   ├──> Microsoft Graph, Azure Resource Manager, Azure Resource Graph
                                   │      scanner: read-only application permissions of the app registration
                                   │      revoke:  delegated token of the signed-in reviewer
-                                  ├──> Azure Database for PostgreSQL Flexible Server (snapshots, decisions, sign-in keys)
+                                  ├──> PostgreSQL: Azure Database for PostgreSQL Flexible Server, or your own server (snapshots, decisions, sign-in keys)
                                   └──> Azure Key Vault (private network option only: client secret, connection string)
 ```
 
@@ -41,6 +41,14 @@ The Bicep template `deploy/bicep/appservice.bicep` has two options:
 | Network | None | VNet integration of the web app. A new VNet, or your existing subnets and private DNS zones |
 | Rights of the deploying person | Contributor on the resource group | Contributor and Role Based Access Control Administrator on the resource group, plus network rights if the network is elsewhere ([PERMISSIONS.md](PERMISSIONS.md)) |
 | Approximate cost per month with the default sizes (West Europe, pay-as-you-go list price) | about USD 125: App Service P0v3 (65), PostgreSQL B2s (58), 32 GB storage (4) | about USD 135: the same, plus a private endpoint (about 7) and two private DNS zones (1) |
+
+The template has three database choices:
+
+| Database | Parameters | What the template does | The portal signs in with |
+|---|---|---|---|
+| Azure PostgreSQL with managed identity (default) | none | Creates Azure Database for PostgreSQL Flexible Server. The server accepts only Microsoft Entra sign-in. The managed identity `id-<app-name>` of the web app is its administrator. | A Microsoft Entra token of the managed identity. There is no database password. |
+| Azure PostgreSQL with password | `databaseAuthentication=Password`, `postgresAdminPassword` | Creates the server with the administrator login `accessreviewadmin`. | Login and password |
+| Your own PostgreSQL server, for example on a VM | `databaseServer=ExistingServer`, `existingServerConnectionString` | Creates no database server ([Option C](#option-c-your-own-postgresql-server)). | Login and password from your connection string |
 
 Sizes for larger tenants: [SIZING.md](SIZING.md).
 
@@ -133,15 +141,20 @@ You can run the script again at any time. It only adds what is missing.
 
 ## Step 4. Create the Azure resources
 
-Read the values from the script output and create a random password for the PostgreSQL administrator:
+Read the values from the script output:
 
 ```powershell
 $values = Get-Content $envFile -Raw | ConvertFrom-StringData
 $clientId = $values.AzureAd__ClientId
 $clientSecret = $values.AzureAd__ClientSecret
-$postgresPassword = 'Pg1-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
 
 az group create --name $resourceGroup --location $location --output none
+```
+
+The commands of options A and B create the default database: Azure PostgreSQL with the managed identity of the web app, without a password. To use a password instead, create one and add `databaseAuthentication=Password postgresAdminPassword=$postgresPassword` to the parameters:
+
+```powershell
+$postgresPassword = 'Pg1-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
 ```
 
 The template stores the password in the connection string of the portal. You do not need to keep it. To connect to the database yourself later, set a new password with `az postgres flexible-server update --resource-group $resourceGroup --name $postgresName --admin-password <new password>`, then update the connection string (run the template again with the new password).
@@ -152,7 +165,7 @@ The template stores the password in the connection string of the portal. You do 
 az deployment group create --resource-group $resourceGroup --name accessreview `
     --template-file deploy/bicep/appservice.bicep `
     --parameters appName=$appName postgresServerName=$postgresName `
-                 clientId=$clientId clientSecret=$clientSecret postgresAdminPassword=$postgresPassword
+                 clientId=$clientId clientSecret=$clientSecret
 ```
 
 ### Option B: private network
@@ -163,7 +176,7 @@ With a new virtual network (`10.20.0.0/24`, change it with `vnetAddressPrefix=<r
 az deployment group create --resource-group $resourceGroup --name accessreview `
     --template-file deploy/bicep/appservice.bicep `
     --parameters appName=$appName postgresServerName=$postgresName keyVaultName=$keyVaultName privateNetwork=true `
-                 clientId=$clientId clientSecret=$clientSecret postgresAdminPassword=$postgresPassword
+                 clientId=$clientId clientSecret=$clientSecret
 ```
 
 With your existing network, give the resource ids of the three subnets and, if the private DNS zones are central (for example in a hub subscription), of the two zones. Check the rights in [PERMISSIONS.md, section 4](PERMISSIONS.md#4-private-network-rights-outside-the-resource-group) first.
@@ -181,19 +194,63 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
                  appSubnetResourceId=$appSubnetId postgresSubnetResourceId=$postgresSubnetId `
                  privateEndpointSubnetResourceId=$endpointSubnetId `
                  postgresPrivateDnsZoneResourceId=$postgresZoneId keyVaultPrivateDnsZoneResourceId=$vaultZoneId `
-                 clientId=$clientId clientSecret=$clientSecret postgresAdminPassword=$postgresPassword
+                 clientId=$clientId clientSecret=$clientSecret
 ```
 
 Leave out the two zone parameters to create new zones in the resource group and link them to your virtual network.
 
 The Key Vault has purge protection. After you delete it, its name stays reserved for 90 days. For a test, add `enablePurgeProtection=false`.
 
-### For both options
+### Option C: your own PostgreSQL server
 
-The deployment takes about 8 minutes for the quick start and about 11 minutes for the private network option. PostgreSQL takes most of the time.
+Use this option for PostgreSQL on a VM, on-premises or in Azure (version 16 or later). The template creates no database server. The database administrator prepares the server:
+
+1. A login that owns the database. The portal creates its tables at the first start.
+
+   ```sql
+   CREATE ROLE accessreview LOGIN PASSWORD '<password>';
+   CREATE DATABASE accessreview OWNER accessreview;
+   ```
+
+2. TLS on the server (`ssl = on`), and a line in `pg_hba.conf` for the address range of the app subnet:
+   `hostssl accessreview accessreview <address range of the app subnet> scram-sha-256`
+3. A network path from the app subnet to the server on port 5432: the same virtual network, peering, VPN or ExpressRoute. Firewalls on the way must allow the address range of the app subnet. Intrusion detection on a firewall or VPN device can block connections to port 5432: add an exception for the app subnet.
+
+The web app reaches a server in your network only through VNet integration. So use the private network option with your existing subnets (see option B). The connection string with the password goes to Key Vault.
+
+```powershell
+$dbConnection = 'Host=pg01.contoso.com;Port=5432;Database=accessreview;Username=accessreview;Password=<password>;Ssl Mode=VerifyFull'
+# Only when the server certificate comes from your own CA: the CA certificate (.cer file) as base64
+$dbCa = [Convert]::ToBase64String([Security.Cryptography.X509Certificates.X509Certificate2]::new('C:\certs\contoso-root-ca.cer').RawData)
+
+az deployment group create --resource-group $resourceGroup --name accessreview `
+    --template-file deploy/bicep/appservice.bicep `
+    --parameters appName=$appName keyVaultName=$keyVaultName privateNetwork=true `
+                 appSubnetResourceId=$appSubnetId privateEndpointSubnetResourceId=$endpointSubnetId `
+                 keyVaultPrivateDnsZoneResourceId=$vaultZoneId `
+                 databaseServer=ExistingServer existingServerConnectionString=$dbConnection existingServerCaCertificate=$dbCa `
+                 clientId=$clientId clientSecret=$clientSecret
+```
+
+- `Ssl Mode=VerifyFull` checks the certificate of the server and its name: `Host` must be a name or IP address in the certificate. `Ssl Mode=Require` encrypts the connection but does not check the certificate.
+- The CA certificate becomes the app setting `Database__RootCertificate`. You can change it later in **Environment variables** of the web app.
+
+### For all options
+
+The deployment takes about 8 minutes for the quick start and about 11 minutes for the private network option. PostgreSQL takes most of the time. With your own server (option C) it takes a few minutes.
 
 - To see the planned changes first, run the same command with `az deployment group what-if` instead of `az deployment group create`.
 - To connect to the quick start database from your computer (psql, pgAdmin), add `administratorClientIp=<your public IP>`.
+- Managed identity: the server accepts only Microsoft Entra sign-in. To connect yourself, make your account (or a group) a second Microsoft Entra administrator, then use a token as the password:
+
+  ```powershell
+  $me = az ad signed-in-user show --query "{id:id, upn:userPrincipalName}" -o json | ConvertFrom-Json
+  az postgres flexible-server microsoft-entra-admin create --resource-group $resourceGroup --server-name $postgresName `
+      --display-name $me.upn --object-id $me.id --type User
+  $env:PGPASSWORD = az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv
+  psql "host=$postgresName.postgres.database.azure.com dbname=accessreview user=$($me.upn) sslmode=require"
+  ```
+
 - Other parameters (sizes, PostgreSQL version, storage) are described at the top of `deploy/bicep/appservice.bicep`.
 
 When the deployment is finished, delete the temporary file. The secret is now stored in Azure.
@@ -237,7 +294,7 @@ az rest --method get --url "https://management.azure.com$siteId/config/configref
 Then:
 
 1. Open `https://<app-name>.azurewebsites.net` and sign in as `$adminUpn`.
-2. Open **Settings > Diagnostics**. All checks of the scanner must be **OK**. The zero-privilege checks must say "Read-only". The section "PostgreSQL" shows the database version and size.
+2. Open **Settings > Diagnostics**. All checks of the scanner must be **OK**. The zero-privilege checks must say "Read-only". The section "PostgreSQL" shows the database version and size, how the portal signs in (managed identity or user name and password) and the encryption of the connection.
 3. Open **Snapshots & Scan**. If day 1 of the month was less than 7 days ago, the portal already started the monthly snapshot by itself, a few minutes after the first start. Otherwise click **Run Live Scan**. A scan of a small tenant takes about 15 minutes, most of it for the Azure Activity Log. Large tenants: see [SIZING.md](SIZING.md).
 
 ## Step 7. Give access to the reviewers
@@ -356,7 +413,7 @@ $values = Get-Content $envFile -Raw | ConvertFrom-StringData
 ```
 
 - Quick start: `az webapp config appsettings set --resource-group $resourceGroup --name $appName --settings "AzureAd__ClientSecret=$($values.AzureAd__ClientSecret)" --output none`
-- Private network: run the commands of step 4 again (from `$values = ...`). A new PostgreSQL password is fine: the template changes the password of the server and the connection string together. Then restart the web app: `az webapp restart --resource-group $resourceGroup --name $appName`.
+- Private network: run the commands of step 4 again (from `$values = ...`), with the same database parameters. With `databaseAuthentication=Password`, a new PostgreSQL password is fine: the template changes the password of the server and the connection string together. Then restart the web app: `az webapp restart --resource-group $resourceGroup --name $appName`.
 
 Then delete `$envFile`, and delete the old secret in **App registrations > AccessReview-Portal > Certificates & secrets**.
 
@@ -382,6 +439,10 @@ If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role
 | Deployment: `RequestDisallowedByPolicy` | A policy blocks a resource or a setting. The message names the policy. See [PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy). |
 | Deployment: `AuthorizationFailed`, `LinkedAuthorizationFailed` | Rights at the scope in the message. See [PERMISSIONS.md, section 9](PERMISSIONS.md#9-errors-and-what-they-mean). |
 | `/healthz` returns 503 or times out | Read the start log of the portal: `az webapp log tail --resource-group $resourceGroup --name $appName`. "Database is not ready" means that the portal cannot reach PostgreSQL. "The database schema is not up to date" means that `Database__ApplyMigrationsOnStartup` is false. |
+| Your own server: "Database is not ready (Failed to connect ...)" or "The operation has timed out" | No network path from the app subnet to the server on port 5432: VNet integration, routes (peering, VPN, ExpressRoute), firewalls, intrusion detection, the firewall of the server. Test from the web app: **Advanced Tools > Go > Bash** (Kudu uses the VNet integration too), then `timeout 5 bash -c '</dev/tcp/<server>/5432' && echo open`. |
+| Your own server: `no pg_hba.conf entry for host` or `password authentication failed` | Add the `hostssl` line for the app subnet to `pg_hba.conf` and reload PostgreSQL. Check the login and password in the connection string (Key Vault secret `portal-db-connection` or app setting `ConnectionStrings__DefaultConnection`). |
+| Your own server: "The remote certificate was rejected" or a name mismatch | The CA of the server certificate is missing (`existingServerCaCertificate`, app setting `Database__RootCertificate`), or `Host` in the connection string is not a name or IP address in the certificate. |
+| Managed identity: `role "id-<app-name>" does not exist` or a token error | The identity is not a Microsoft Entra administrator of the server, or `Database__ManagedIdentityClientId` is not the client ID of `id-<app-name>`. Check **Security > Authentication** of the server and run the template again. |
 | Private network: Key Vault reference status `AccessToKeyVaultDenied` | The web app cannot read Key Vault: no role, no network path, or the role is not active yet. Check the role `Key Vault Secrets User` of the identity `id-<app-name>` on the vault, and the private endpoint `pe-<vault name>`. Then restart the web app: `az webapp restart --resource-group $resourceGroup --name $appName`. If you changed the template to use a vault with public access, check that no policy set public network access to **Disabled** ([PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy)). |
 | Sign-in fails | `AADSTS50011`: the address is not a redirect URI; run `setup-sp.ps1 -PortalUrl https://$appName.azurewebsites.net -SkipSecret`. More errors: [PERMISSIONS.md, section 9](PERMISSIONS.md#9-errors-and-what-they-mean). |
 | Diagnostics: a Graph or Azure check fails | Admin consent or a role of the scanner is missing. Run `setup-sp.ps1` again. |

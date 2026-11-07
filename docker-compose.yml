@@ -9,7 +9,8 @@
 name: access-review
 
 x-connection: &connection
-  ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=${POSTGRES_DB:-accessreview};Username=${POSTGRES_USER:-accessreview};Password=${POSTGRES_PASSWORD}"
+  # DB_CONNECTION_STRING in .env points the portal to an external PostgreSQL server. Default: the container "db".
+  ConnectionStrings__DefaultConnection: "${DB_CONNECTION_STRING:-Host=db;Port=5432;Database=${POSTGRES_DB:-accessreview};Username=${POSTGRES_USER:-accessreview};Password=${POSTGRES_PASSWORD}}"
 
 services:
   db:
@@ -45,6 +46,9 @@ services:
         condition: service_healthy
     environment:
       <<: *connection
+    # CA certificate of an external PostgreSQL server (Root Certificate=/https/db-ca.crt in DB_CONNECTION_STRING)
+    volumes:
+      - ./certs:/https:ro
 
   web:
     build:

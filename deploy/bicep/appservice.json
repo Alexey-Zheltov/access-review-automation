@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15247448882253561458"
+      "templateHash": "9463477132444913749"
     }
   },
   "parameters": {
@@ -58,10 +58,47 @@
         "description": "Client secret of the app registration."
       }
     },
+    "databaseServer": {
+      "type": "string",
+      "defaultValue": "AzurePostgreSQL",
+      "allowedValues": [
+        "AzurePostgreSQL",
+        "ExistingServer"
+      ],
+      "metadata": {
+        "description": "AzurePostgreSQL: the template creates Azure Database for PostgreSQL Flexible Server. ExistingServer: your own PostgreSQL server, for example on a VM; the template creates no database server."
+      }
+    },
+    "databaseAuthentication": {
+      "type": "string",
+      "defaultValue": "ManagedIdentity",
+      "allowedValues": [
+        "ManagedIdentity",
+        "Password"
+      ],
+      "metadata": {
+        "description": "AzurePostgreSQL only. ManagedIdentity: the portal signs in with its managed identity (Microsoft Entra), no password. Password: administrator login and password."
+      }
+    },
+    "existingServerConnectionString": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "ExistingServer only: connection string with login and password, for example Host=pg01.contoso.com;Port=5432;Database=accessreview;Username=accessreview;Password=<password>;Ssl Mode=VerifyFull"
+      }
+    },
+    "existingServerCaCertificate": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "ExistingServer only, optional: CA certificate of the server (base64 of the .cer file, or PEM) when the server certificate comes from your own CA. Needed for Ssl Mode=VerifyFull."
+      }
+    },
     "postgresServerName": {
       "type": "string",
+      "defaultValue": "[format('psql-{0}', parameters('appName'))]",
       "metadata": {
-        "description": "PostgreSQL server name (globally unique, lower case)."
+        "description": "AzurePostgreSQL only: server name (globally unique, lower case)."
       }
     },
     "postgresAdminLogin": {
@@ -70,8 +107,9 @@
     },
     "postgresAdminPassword": {
       "type": "securestring",
+      "defaultValue": "",
       "metadata": {
-        "description": "Administrator password of the PostgreSQL server. Do not use ; or quotes."
+        "description": "AzurePostgreSQL with Password only: administrator password of the server. Do not use ; or quotes."
       }
     },
     "postgresSkuName": {
@@ -188,13 +226,17 @@
     "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
     "portalUrl": "[format('https://{0}.azurewebsites.net', parameters('appName'))]",
     "databaseName": "accessreview",
+    "createPostgres": "[equals(parameters('databaseServer'), 'AzurePostgreSQL')]",
+    "useManagedIdentity": "[and(variables('createPostgres'), equals(parameters('databaseAuthentication'), 'ManagedIdentity'))]",
+    "useIdentity": "[or(parameters('privateNetwork'), variables('useManagedIdentity'))]",
+    "identityName": "[format('id-{0}', parameters('appName'))]",
     "createVnet": "[and(parameters('privateNetwork'), empty(parameters('appSubnetResourceId')))]",
     "vnetName": "[format('vnet-{0}', parameters('appName'))]",
     "appSubnetId": "[if(variables('createVnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'snet-app'), parameters('appSubnetResourceId'))]",
     "postgresSubnetId": "[if(variables('createVnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'snet-postgres'), parameters('postgresSubnetResourceId'))]",
     "endpointSubnetId": "[if(variables('createVnet'), resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'snet-private-endpoints'), parameters('privateEndpointSubnetResourceId'))]",
     "vnetId": "[if(variables('createVnet'), resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), if(parameters('privateNetwork'), split(parameters('appSubnetResourceId'), '/subnets/')[0], ''))]",
-    "createPostgresZone": "[and(parameters('privateNetwork'), empty(parameters('postgresPrivateDnsZoneResourceId')))]",
+    "createPostgresZone": "[and(and(parameters('privateNetwork'), variables('createPostgres')), empty(parameters('postgresPrivateDnsZoneResourceId')))]",
     "createVaultZone": "[and(parameters('privateNetwork'), empty(parameters('keyVaultPrivateDnsZoneResourceId')))]",
     "postgresZoneName": "[format('{0}.private.postgres.database.azure.com', parameters('postgresServerName'))]",
     "postgresZoneId": "[if(variables('createPostgresZone'), resourceId('Microsoft.Network/privateDnsZones', variables('postgresZoneName')), parameters('postgresPrivateDnsZoneResourceId'))]",
@@ -304,10 +346,10 @@
       ]
     },
     {
-      "condition": "[parameters('privateNetwork')]",
+      "condition": "[variables('useIdentity')]",
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
       "apiVersion": "2023-01-31",
-      "name": "[format('id-{0}', parameters('appName'))]",
+      "name": "[variables('identityName')]",
       "location": "[parameters('location')]",
       "tags": "[parameters('tags')]"
     },
@@ -354,7 +396,7 @@
       "apiVersion": "2023-07-01",
       "name": "[format('{0}/{1}', parameters('keyVaultName'), 'portal-db-connection')]",
       "properties": {
-        "value": "[format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword'))]",
+        "value": "[if(not(variables('createPostgres')), parameters('existingServerConnectionString'), if(variables('useManagedIdentity'), format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName')), format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword'))))]",
         "contentType": "Npgsql connection string"
       },
       "dependsOn": [
@@ -416,14 +458,14 @@
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
-      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName'))), variables('keyVaultSecretsUserRoleId'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), variables('keyVaultSecretsUserRoleId'))]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName'))), '2023-01-31').principalId]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]",
         "principalType": "ServicePrincipal"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName')))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
       ]
     },
@@ -449,10 +491,10 @@
       "location": "[parameters('location')]",
       "tags": "[parameters('tags')]",
       "kind": "app,linux",
-      "identity": "[if(parameters('privateNetwork'), createObject('type', 'UserAssigned', 'userAssignedIdentities', createObject(format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName')))), createObject())), null())]",
+      "identity": "[if(variables('useIdentity'), createObject('type', 'UserAssigned', 'userAssignedIdentities', createObject(format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))), createObject())), null())]",
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]",
-        "keyVaultReferenceIdentity": "[if(parameters('privateNetwork'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName'))), null())]",
+        "keyVaultReferenceIdentity": "[if(parameters('privateNetwork'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), null())]",
         "httpsOnly": true,
         "clientAffinityEnabled": true,
         "virtualNetworkSubnetId": "[if(parameters('privateNetwork'), variables('appSubnetId'), null())]",
@@ -469,9 +511,9 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName')))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]",
-        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}', parameters('appName'))), variables('keyVaultSecretsUserRoleId')))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), variables('keyVaultSecretsUserRoleId')))]",
         "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('pe-{0}', parameters('keyVaultName')), 'default')]"
       ]
     },
@@ -483,16 +525,20 @@
         "SCM_DO_BUILD_DURING_DEPLOYMENT": "false",
         "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
         "Database__ApplyMigrationsOnStartup": "true",
+        "Database__Authentication": "[if(variables('useManagedIdentity'), 'ManagedIdentity', 'Password')]",
+        "Database__ManagedIdentityClientId": "[if(variables('useManagedIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId, '')]",
+        "Database__RootCertificate": "[if(variables('createPostgres'), '', parameters('existingServerCaCertificate'))]",
         "Authentication__Mode": "EntraId",
         "Portal__PublicBaseUrl": "[variables('portalUrl')]",
         "AzureAd__TenantId": "[parameters('tenantId')]",
         "AzureAd__ClientId": "[parameters('clientId')]",
         "AzureAd__ClientSecret": "[if(parameters('privateNetwork'), format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-client-secret)', parameters('keyVaultName')), parameters('clientSecret'))]",
-        "ConnectionStrings__DefaultConnection": "[if(parameters('privateNetwork'), format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-db-connection)', parameters('keyVaultName')), format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))]"
+        "ConnectionStrings__DefaultConnection": "[if(parameters('privateNetwork'), format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-db-connection)', parameters('keyVaultName')), if(not(variables('createPostgres')), parameters('existingServerConnectionString'), if(variables('useManagedIdentity'), format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName')), format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('keyVaultName'), 'portal-client-secret')]",
         "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('keyVaultName'), 'portal-db-connection')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName'))))]",
         "[resourceId('Microsoft.Web/sites', parameters('appName'))]"
       ]
@@ -542,6 +588,7 @@
       ]
     },
     {
+      "condition": "[variables('createPostgres')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "[format('postgres-{0}', uniqueString(parameters('postgresServerName')))]",
@@ -566,6 +613,10 @@
           "administratorPassword": {
             "value": "[parameters('postgresAdminPassword')]"
           },
+          "passwordAuth": {
+            "value": "[not(variables('useManagedIdentity'))]"
+          },
+          "entraAdministrators": "[if(variables('useManagedIdentity'), createObject('value', createArray(createObject('objectId', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId, 'principalName', variables('identityName'), 'principalType', 'ServicePrincipal'))), createObject('value', createArray()))]",
           "skuName": {
             "value": "[parameters('postgresSkuName')]"
           },
@@ -595,7 +646,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "321123657552053184"
+              "templateHash": "13444219598018421596"
             }
           },
           "parameters": {
@@ -622,10 +673,32 @@
               }
             },
             "administratorLogin": {
-              "type": "string"
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Administrator login. Only with passwordAuth = true."
+              }
             },
             "administratorPassword": {
-              "type": "securestring"
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Administrator password. Only with passwordAuth = true."
+              }
+            },
+            "passwordAuth": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Sign-in with administratorLogin and administratorPassword. false = Microsoft Entra authentication only."
+              }
+            },
+            "entraAdministrators": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Microsoft Entra administrators of the server: objects { objectId, principalName, principalType (User, Group or ServicePrincipal) }."
+              }
             },
             "skuName": {
               "type": "string",
@@ -714,6 +787,7 @@
           },
           "variables": {
             "privateAccess": "[not(empty(parameters('delegatedSubnetResourceId')))]",
+            "entraAuth": "[or(parameters('enableEntraAuth'), not(parameters('passwordAuth')))]",
             "serverParameters": {
               "work_mem": "16384",
               "maintenance_work_mem": "262144",
@@ -739,8 +813,8 @@
               },
               "properties": {
                 "version": "[parameters('postgresVersion')]",
-                "administratorLogin": "[parameters('administratorLogin')]",
-                "administratorLoginPassword": "[parameters('administratorPassword')]",
+                "administratorLogin": "[if(parameters('passwordAuth'), parameters('administratorLogin'), null())]",
+                "administratorLoginPassword": "[if(parameters('passwordAuth'), parameters('administratorPassword'), null())]",
                 "storage": {
                   "storageSizeGB": "[parameters('storageSizeGB')]",
                   "autoGrow": "Enabled"
@@ -754,9 +828,9 @@
                 },
                 "network": "[if(variables('privateAccess'), createObject('delegatedSubnetResourceId', parameters('delegatedSubnetResourceId'), 'privateDnsZoneArmResourceId', parameters('privateDnsZoneArmResourceId'), 'publicNetworkAccess', 'Disabled'), createObject('publicNetworkAccess', 'Enabled'))]",
                 "authConfig": {
-                  "activeDirectoryAuth": "[if(parameters('enableEntraAuth'), 'Enabled', 'Disabled')]",
-                  "passwordAuth": "Enabled",
-                  "tenantId": "[if(parameters('enableEntraAuth'), subscription().tenantId, null())]"
+                  "activeDirectoryAuth": "[if(variables('entraAuth'), 'Enabled', 'Disabled')]",
+                  "passwordAuth": "[if(parameters('passwordAuth'), 'Enabled', 'Disabled')]",
+                  "tenantId": "[if(variables('entraAuth'), subscription().tenantId, null())]"
                 }
               }
             },
@@ -788,6 +862,26 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', parameters('serverName'), parameters('databaseName'))]",
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "administrators",
+                "count": "[length(parameters('entraAdministrators'))]",
+                "mode": "serial",
+                "batchSize": 1
+              },
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/administrators",
+              "apiVersion": "2025-08-01",
+              "name": "[format('{0}/{1}', parameters('serverName'), parameters('entraAdministrators')[copyIndex()].objectId)]",
+              "properties": {
+                "principalName": "[parameters('entraAdministrators')[copyIndex()].principalName]",
+                "principalType": "[parameters('entraAdministrators')[copyIndex()].principalType]",
+                "tenantId": "[subscription().tenantId]"
+              },
+              "dependsOn": [
+                "parameters",
                 "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
               ]
             },
@@ -841,6 +935,7 @@
         }
       },
       "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[resourceId('Microsoft.Network/privateDnsZones', variables('postgresZoneName'))]",
         "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', variables('postgresZoneName'), format('link-{0}', parameters('appName')))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
@@ -858,7 +953,14 @@
     },
     "postgresFqdn": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value]"
+      "value": "[if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(parameters('postgresServerName')))), '2025-04-01').outputs.fqdn.value, '')]"
+    },
+    "postgresUser": {
+      "type": "string",
+      "metadata": {
+        "description": "User name of the portal in PostgreSQL. Managed identity: the identity name."
+      },
+      "value": "[if(variables('useManagedIdentity'), variables('identityName'), if(variables('createPostgres'), parameters('postgresAdminLogin'), ''))]"
     },
     "keyVaultName": {
       "type": "string",

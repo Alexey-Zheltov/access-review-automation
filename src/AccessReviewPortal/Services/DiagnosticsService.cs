@@ -10,6 +10,7 @@ using AccessReviewPortal.Services.Scanning;
 using global::Azure.Monitor.Query;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace AccessReviewPortal.Services;
 
@@ -28,6 +29,7 @@ public sealed class DiagnosticsService(
     IOptions<ReviewSettingsOptions> reviewOptions,
     IOptions<PortalAuthOptions> authOptions,
     IOptions<PortalAuthorizationOptions> authorizationOptions,
+    IOptions<DatabaseOptions> databaseOptions,
     SettingsService settings)
 {
     public const string Ok = "OK", Warning = "Warning", Failed = "Failed", Info = "Info";
@@ -90,6 +92,17 @@ public sealed class DiagnosticsService(
             var size = await SnapshotService.GetDatabaseSizeAsync(db, ct);
             var pending = (await db.Database.GetPendingMigrationsAsync(ct)).ToList();
             checks.Add(new("PostgreSQL", "Connection", Ok, version.Split(',')[0]));
+            var user = await db.Database.SqlQueryRaw<string>("SELECT current_user::text AS \"Value\"").SingleAsync(ct);
+            checks.Add(new("PostgreSQL", "Sign-in", Info, (databaseOptions.Value.Authentication == DatabaseAuthentication.ManagedIdentity
+                ? "Managed identity (Microsoft Entra token)" : "User name and password") + $", user {user}"));
+            var tls = await db.Database.SqlQueryRaw<string>(
+                "SELECT CASE WHEN ssl THEN 'Encrypted (' || version || ')' ELSE 'Not encrypted' END AS \"Value\" FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+                .SingleAsync(ct);
+            // The container "db" of docker-compose is on the same host: no TLS needed there.
+            var host = new NpgsqlConnectionStringBuilder(db.Database.GetConnectionString()).Host ?? "";
+            var local = host is "db" or "localhost" or "127.0.0.1";
+            var encrypted = tls.StartsWith("Encrypted");
+            checks.Add(new("PostgreSQL", "Encryption", encrypted ? Ok : local ? Info : Warning, tls));
             checks.Add(new("PostgreSQL", "Database size", Info, $"{size / 1024.0 / 1024.0:F2} MB (pg_database_size)"));
             checks.Add(new("PostgreSQL", "Migrations", pending.Count == 0 ? Ok : Warning, pending.Count == 0 ? "Schema is up to date" : "Pending: " + string.Join(", ", pending)));
         }
