@@ -342,7 +342,7 @@ Compress-Archive -Path artifacts/publish/* -DestinationPath artifacts/portal.zip
 az webapp deploy --resource-group $resourceGroup --name $appName --src-path artifacts/portal.zip --type zip
 ```
 
-On an existing web app the command waits until the new version runs (under one minute in the tests). The portal updates the database schema at the start. A scan that runs during the update is stopped and marked as failed. Run it again.
+On an existing web app the command waits until the new version runs (usually under one minute). The portal updates the database schema at the start. A scan that runs during the update is stopped and marked as failed. Run it again.
 
 With GitHub Actions, run the workflow `deploy-appservice` again instead.
 

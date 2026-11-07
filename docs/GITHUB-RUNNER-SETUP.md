@@ -24,7 +24,7 @@ Runner container  --(Docker socket)-->  Docker engine of the runner host   (dock
 
 | Item | Details |
 |---|---|
-| Runner host | A Linux VM with Docker Engine, only for the runner. Tested: Ubuntu Server 24.04 LTS. 2 vCPU, 4 GB RAM, 40 GB disk. Windows Server with Docker (Linux containers) also works. See [Prepare the runner host](#prepare-the-runner-host-ubuntu-server). |
+| Runner host | A Linux VM with Docker Engine, only for the runner. The steps below use Ubuntu Server 24.04 LTS. 2 vCPU, 4 GB RAM, 40 GB disk. Windows Server with Docker (Linux containers) also works. See [Prepare the runner host](#prepare-the-runner-host-ubuntu-server). |
 | Outbound HTTPS from the runner | `github.com`, `api.github.com`, `codeload.github.com`, `*.actions.githubusercontent.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `*.blob.core.windows.net`, `mcr.microsoft.com`, `api.nuget.org`, `builds.dotnet.microsoft.com`. To install Docker and to build the image with Azure CLI: also `download.docker.com`, `packages.microsoft.com`, `aka.ms`. |
 | SSH from the runner to the target VM | Port 22. A deploy user with a key pair (see step 1). |
 | Target VM | Docker with the Compose plugin, the deployment folder with `.env` and `certs/` (see INSTALL-GUIDE.md). |
@@ -32,7 +32,7 @@ Runner container  --(Docker socket)-->  Docker engine of the runner host   (dock
 
 ## Prepare the runner host (Ubuntu Server)
 
-These steps were tested on a new Ubuntu Server 24.04 LTS VM. Run them as an admin user with `sudo`.
+The commands are for a new Ubuntu Server 24.04 LTS VM. Run them as an admin user with `sudo`.
 
 **Updates and time.** GitHub and Microsoft Entra ID refuse tokens when the clock is wrong.
 

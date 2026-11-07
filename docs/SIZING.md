@@ -56,7 +56,7 @@ foreach ($g in $groups) {
 "Estimated rows per snapshot: $([int]$total + $memberRows), plus the Microsoft Entra role assignments"
 ```
 
-Your account must be able to read groups in Microsoft Entra ID (members of the tenant can, by default). In the test tenant the estimate was 190 rows plus 25 Entra and eligible assignments; the first scan stored 218 rows.
+Your account must be able to read groups in Microsoft Entra ID (members of the tenant can, by default). Example: in a small tenant the estimate is 190 rows plus 25 Entra and eligible assignments, and the first scan stores 218 rows.
 
 After the first scan, the page **Snapshots & Scan** shows the real number of rows and the size of each table.
 
@@ -120,11 +120,11 @@ The portal runs as **one instance**. The size of the plan matters for two things
   Plan about 9 KB of memory per exported row, plus 0.5 GB for the portal.
 - **The request time limit of App Service: 230 seconds.** An interactive export of 500,000 rows took 130 to 150 seconds. Above about 700,000 rows the export can reach the limit on any plan. Then export with a filter from the Review page (for example one subscription). The report of the quarterly campaign is built in the background, so this limit does not apply to it, but the memory rule does.
 
-The scan itself needs little: during a scan of the test tenant the portal used about 350 MB of memory and at most 28 % CPU of a P0v3. A larger plan does not make the scan faster (section 6).
+The scan itself needs little: during a scan of a small tenant the portal uses about 350 MB of memory and at most 28 % CPU of a P0v3. A larger plan does not make the scan faster (section 6).
 
 ## 6. Scan duration
 
-The scan spends most of its time waiting for Microsoft APIs. Measured in the test tenant (1 subscription, 695 resources, 196 Azure role assignments, 21 Entra role assignments):
+The scan spends most of its time waiting for Microsoft APIs. Example for a small tenant (1 subscription, 695 resources, 196 Azure role assignments, 21 Entra role assignments):
 
 | Part of the scan | Time |
 |---|---|
@@ -164,4 +164,4 @@ az appservice plan update --resource-group $resourceGroup --name "asp-$appName" 
 az postgres flexible-server update --resource-group $resourceGroup --name $postgresName --tier GeneralPurpose --sku-name Standard_D2ds_v5 --yes
 ```
 
-The PostgreSQL change restarts the server. In the test it took 8 minutes. Do it outside the scan schedule. The plan change can fail with "The pricing tier is not allowed in this resource group" for some tiers (for example memory-optimized P1mv3): the plan cannot move to that tier on its current hardware. Choose another tier, or create a new plan.
+The PostgreSQL change restarts the server. This can take about 8 minutes. Do it outside the scan schedule. The plan change can fail with "The pricing tier is not allowed in this resource group" for some tiers (for example memory-optimized P1mv3): the plan cannot move to that tier on its current hardware. Choose another tier, or create a new plan.
