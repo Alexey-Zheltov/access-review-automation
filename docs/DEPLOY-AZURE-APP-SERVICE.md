@@ -299,20 +299,24 @@ The template turns off basic authentication (FTP and SCM). The workflow does not
 
 ### Runner
 
-The workflow runs on a self-hosted runner with the labels `self-hosted`, `linux` and `access-review`. Build the runner image with Azure CLI, then start it with a registration token ([GITHUB-RUNNER-SETUP.md](GITHUB-RUNNER-SETUP.md), steps 3 to 6):
+The workflow runs on a self-hosted runner with the labels `self-hosted`, `linux` and `access-review`. Prepare a Linux VM for it, build the runner image with Azure CLI, then start it with a registration token ([GITHUB-RUNNER-SETUP.md](GITHUB-RUNNER-SETUP.md): "Prepare the runner host" and steps 3 to 6):
 
 ```bash
-cd deploy/github-runner
-docker build --build-arg AZURE_CLI=true -t access-review-runner:1 .
-docker run -d --name access-review-runner --restart unless-stopped \
+cd ~/github-runner                      # the folder deploy/github-runner, copied to the runner VM
+sudo docker build --build-arg AZURE_CLI=true -t access-review-runner:1 .
+
+read -rsp 'Registration token: ' RUNNER_TOKEN; echo; export RUNNER_TOKEN
+sudo --preserve-env=RUNNER_TOKEN docker run -d --name access-review-runner --restart unless-stopped \
   -e RUNNER_URL=https://github.com/<owner>/<repo> \
-  -e RUNNER_TOKEN=<registration token> \
+  -e RUNNER_TOKEN \
   -e RUNNER_NAME=access-review-runner-01 \
   -e RUNNER_LABELS=access-review \
   access-review-runner:1
+unset RUNNER_TOKEN
 ```
 
-This workflow does not use Docker, so the runner does not need the Docker socket. The runner needs outbound HTTPS to GitHub (see GITHUB-RUNNER-SETUP.md), `builds.dotnet.microsoft.com`, `api.nuget.org`, `login.microsoftonline.com`, `management.azure.com` and `<app-name>.scm.azurewebsites.net`.
+`-e RUNNER_TOKEN` without a value passes the variable to the container, so the token is not in the command line or in the shell history.
+This workflow does not use Docker, so the runner does not need the Docker socket. The runner needs outbound HTTPS to GitHub (see GITHUB-RUNNER-SETUP.md), `builds.dotnet.microsoft.com`, `api.nuget.org`, `login.microsoftonline.com`, `management.azure.com`, `<app-name>.scm.azurewebsites.net` and `<app-name>.azurewebsites.net` (health check).
 
 To use a GitHub-hosted runner instead, add the **repository** variable `RUNNER_LABELS` with the value `["ubuntu-latest"]` (**Settings > Secrets and variables > Actions > Variables**). The web app must then accept deployments from the internet, which is the case in both options of the template.
 
