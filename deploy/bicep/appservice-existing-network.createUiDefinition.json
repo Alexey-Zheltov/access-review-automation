@@ -9,7 +9,10 @@
         "location": {
           "label": "Region",
           "toolTip": "The region of your virtual network. All resources and private endpoints are created in this region.",
-          "resourceTypes": ["Microsoft.Web/sites", "Microsoft.DBforPostgreSQL/flexibleServers"]
+          "resourceTypes": [
+            "Microsoft.Web/sites",
+            "Microsoft.DBforPostgreSQL/flexibleServers"
+          ]
         }
       }
     },
@@ -22,6 +25,87 @@
           "text": "Before you start: the app registration (client ID and secret), a subnet for App Service and a subnet for private endpoints in your virtual network, and the DNS plan for the private endpoints. Select this box to open the guide.",
           "uri": "https://github.com/Alexey-Zheltov/access-review-automation/blob/main/docs/DEPLOY-AZURE-APP-SERVICE.md#option-d-your-existing-network-private-endpoints-only"
         }
+      },
+      {
+        "name": "network",
+        "type": "Microsoft.Common.Section",
+        "label": "Network",
+        "elements": [
+          {
+            "name": "networkInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "Choose your virtual network and two of its subnets. The template creates no virtual network and no subnets. The list shows the virtual networks in the region above, in all subscriptions that you can read."
+            }
+          },
+          {
+            "name": "vnet",
+            "type": "Microsoft.Solutions.ResourceSelector",
+            "label": "Virtual network",
+            "toolTip": "The virtual network with the two subnets. It must be in the region above.",
+            "resourceType": "Microsoft.Network/virtualNetworks",
+            "options": {
+              "filter": {
+                "subscription": "all",
+                "location": "onBasics"
+              }
+            },
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "vnetApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(basics('network').vnet.id, '?api-version=2024-05-01')]"
+            }
+          },
+          {
+            "name": "appSubnet",
+            "type": "Microsoft.Common.DropDown",
+            "label": "App Service subnet",
+            "toolTip": "VNet integration of the web app: all its outbound traffic goes through this subnet. The list shows the subnets that are delegated to Microsoft.Web/serverFarms. /28 or larger, /26 recommended.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => contains(toLower(string(s.properties.delegations)), 'microsoft.web/serverfarms')), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+            },
+            "visible": true
+          },
+          {
+            "name": "appSubnetNone",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "This virtual network has no subnet delegated to Microsoft.Web/serverFarms. Ask your network team to delegate an empty subnet (/27 or /26): Subnets > the subnet > Subnet delegation > Microsoft.Web/serverFarms. The subnet is then only for App Service."
+            },
+            "visible": "[and(not(empty(basics('network').vnetApi.properties.subnets)), empty(filter(basics('network').vnetApi.properties.subnets, (s) => contains(toLower(string(s.properties.delegations)), 'microsoft.web/serverfarms'))))]"
+          },
+          {
+            "name": "endpointSubnet",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Private endpoint subnet",
+            "toolTip": "The private endpoints of the web app, PostgreSQL and Key Vault (three IP addresses). The list shows subnets without delegation.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+            },
+            "visible": true
+          },
+          {
+            "name": "sameSubnet",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "Choose two different subnets. The App Service subnet is only for App Service."
+            },
+            "visible": "[and(not(empty(basics('network').appSubnet)), equals(basics('network').appSubnet, basics('network').endpointSubnet))]"
+          }
+        ]
       },
       {
         "name": "appName",
@@ -64,12 +148,30 @@
         "constraints": {
           "required": true,
           "allowedValues": [
-            { "label": "B1 (1 vCPU, 1.75 GB)", "value": "B1" },
-            { "label": "B2 (2 vCPU, 3.5 GB)", "value": "B2" },
-            { "label": "P0v3 (1 vCPU, 4 GB)", "value": "P0v3" },
-            { "label": "P1v3 (2 vCPU, 8 GB)", "value": "P1v3" },
-            { "label": "P2v3 (4 vCPU, 16 GB)", "value": "P2v3" },
-            { "label": "P1mv3 (2 vCPU, 16 GB)", "value": "P1mv3" }
+            {
+              "label": "B1 (1 vCPU, 1.75 GB)",
+              "value": "B1"
+            },
+            {
+              "label": "B2 (2 vCPU, 3.5 GB)",
+              "value": "B2"
+            },
+            {
+              "label": "P0v3 (1 vCPU, 4 GB)",
+              "value": "P0v3"
+            },
+            {
+              "label": "P1v3 (2 vCPU, 8 GB)",
+              "value": "P1v3"
+            },
+            {
+              "label": "P2v3 (4 vCPU, 16 GB)",
+              "value": "P2v3"
+            },
+            {
+              "label": "P1mv3 (2 vCPU, 16 GB)",
+              "value": "P1mv3"
+            }
           ]
         }
       },
@@ -113,8 +215,14 @@
             "toolTip": "Azure Database for PostgreSQL: the template creates the server with a private endpoint. Your own server: for example PostgreSQL on a VM; the template creates no server.",
             "constraints": {
               "allowedValues": [
-                { "label": "Azure Database for PostgreSQL", "value": "AzurePostgreSQL" },
-                { "label": "Your own PostgreSQL server", "value": "ExistingServer" }
+                {
+                  "label": "Azure Database for PostgreSQL",
+                  "value": "AzurePostgreSQL"
+                },
+                {
+                  "label": "Your own PostgreSQL server",
+                  "value": "ExistingServer"
+                }
               ],
               "required": true
             }
@@ -127,8 +235,14 @@
             "toolTip": "Managed identity: the identity id-<App name> of the web app is the Microsoft Entra administrator of the server. The server accepts no passwords.",
             "constraints": {
               "allowedValues": [
-                { "label": "Managed identity (no password)", "value": "ManagedIdentity" },
-                { "label": "Password", "value": "Password" }
+                {
+                  "label": "Managed identity (no password)",
+                  "value": "ManagedIdentity"
+                },
+                {
+                  "label": "Password",
+                  "value": "Password"
+                }
               ],
               "required": true
             },
@@ -174,10 +288,22 @@
             "constraints": {
               "required": true,
               "allowedValues": [
-                { "label": "Burstable B2s (2 vCores, 4 GB)", "value": "Standard_B2s" },
-                { "label": "Burstable B2ms (2 vCores, 8 GB)", "value": "Standard_B2ms" },
-                { "label": "General Purpose D2ds_v5 (2 vCores, 8 GB)", "value": "Standard_D2ds_v5" },
-                { "label": "General Purpose D4ds_v5 (4 vCores, 16 GB)", "value": "Standard_D4ds_v5" }
+                {
+                  "label": "Burstable B2s (2 vCores, 4 GB)",
+                  "value": "Standard_B2s"
+                },
+                {
+                  "label": "Burstable B2ms (2 vCores, 8 GB)",
+                  "value": "Standard_B2ms"
+                },
+                {
+                  "label": "General Purpose D2ds_v5 (2 vCores, 8 GB)",
+                  "value": "Standard_D2ds_v5"
+                },
+                {
+                  "label": "General Purpose D4ds_v5 (4 vCores, 16 GB)",
+                  "value": "Standard_D4ds_v5"
+                }
               ]
             },
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
@@ -191,10 +317,22 @@
             "constraints": {
               "required": true,
               "allowedValues": [
-                { "label": "32 GB", "value": 32 },
-                { "label": "64 GB", "value": 64 },
-                { "label": "128 GB", "value": 128 },
-                { "label": "256 GB", "value": 256 }
+                {
+                  "label": "32 GB",
+                  "value": 32
+                },
+                {
+                  "label": "64 GB",
+                  "value": 64
+                },
+                {
+                  "label": "128 GB",
+                  "value": 128
+                },
+                {
+                  "label": "256 GB",
+                  "value": 256
+                }
               ]
             },
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
@@ -207,9 +345,18 @@
             "constraints": {
               "required": true,
               "allowedValues": [
-                { "label": "18", "value": "18" },
-                { "label": "17", "value": "17" },
-                { "label": "16", "value": "16" }
+                {
+                  "label": "18",
+                  "value": "18"
+                },
+                {
+                  "label": "17",
+                  "value": "17"
+                },
+                {
+                  "label": "16",
+                  "value": "16"
+                }
               ]
             },
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
@@ -255,195 +402,120 @@
         ]
       },
       {
-        "name": "network",
-        "label": "Network",
+        "name": "dns",
+        "label": "DNS zones",
         "elements": [
           {
-            "name": "networkInfo",
-            "type": "Microsoft.Common.InfoBox",
-            "options": {
-              "style": "Info",
-              "text": "Choose your virtual network and two of its subnets. The template creates no virtual network and no subnets. The list shows the virtual networks in the region of the Basics tab, in all subscriptions that you can read."
-            }
-          },
-          {
-            "name": "vnet",
-            "type": "Microsoft.Solutions.ResourceSelector",
-            "label": "Virtual network",
-            "toolTip": "The virtual network with the two subnets. It must be in the region of the Basics tab.",
-            "resourceType": "Microsoft.Network/virtualNetworks",
-            "options": {
-              "filter": {
-                "subscription": "all",
-                "location": "onBasics"
-              }
-            },
+            "name": "dnsMode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Private DNS zones",
+            "defaultValue": "Create new zones",
+            "toolTip": "New zones: the template creates privatelink.azurewebsites.net, privatelink.postgres.database.azure.com and privatelink.vaultcore.azure.net in the resource group and links them to the virtual network. Existing zones: your central zones, for example in a hub subscription.",
             "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Create new zones",
+                  "value": "new"
+                },
+                {
+                  "label": "Use existing zones",
+                  "value": "existing"
+                }
+              ],
               "required": true
             }
           },
           {
-            "name": "vnetApi",
-            "type": "Microsoft.Solutions.ArmApiControl",
-            "request": {
-              "method": "GET",
-              "path": "[concat(steps('network').vnet.id, '?api-version=2024-05-01')]"
-            }
-          },
-          {
-            "name": "appSubnet",
-            "type": "Microsoft.Common.DropDown",
-            "label": "App Service subnet",
-            "toolTip": "VNet integration of the web app: all its outbound traffic goes through this subnet. The list shows the subnets that are delegated to Microsoft.Web/serverFarms. /28 or larger, /26 recommended.",
-            "filter": true,
-            "constraints": {
-              "required": true,
-              "allowedValues": "[map(filter(coalesce(steps('network').vnetApi.properties.subnets, parse('[]')), (s) => contains(toLower(string(s.properties.delegations)), 'microsoft.web/serverfarms')), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
-            },
-            "visible": true
-          },
-          {
-            "name": "appSubnetNone",
+            "name": "customDns",
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Warning",
-              "text": "This virtual network has no subnet delegated to Microsoft.Web/serverFarms. Ask your network team to delegate an empty subnet (/27 or /26): Subnets > the subnet > Subnet delegation > Microsoft.Web/serverFarms. The subnet is then only for App Service."
+              "text": "[concat('This virtual network uses custom DNS servers (', string(basics('network').vnetApi.properties.dhcpOptions.dnsServers), '). New zones in this resource group are linked only to this virtual network, so these DNS servers do not see them. Use the existing zones that your DNS servers resolve.')]"
             },
-            "visible": "[and(not(empty(steps('network').vnetApi.properties.subnets)), empty(filter(steps('network').vnetApi.properties.subnets, (s) => contains(toLower(string(s.properties.delegations)), 'microsoft.web/serverfarms'))))]"
+            "visible": "[and(equals(steps('dns').dnsMode, 'new'), not(empty(basics('network').vnetApi.properties.dhcpOptions.dnsServers)))]"
           },
           {
-            "name": "endpointSubnet",
+            "name": "newZonesInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "Users open the portal from your network. Your DNS must resolve <App name>.azurewebsites.net to the private endpoint, for example with a conditional forwarder for privatelink.azurewebsites.net to an Azure DNS resolver."
+            },
+            "visible": "[equals(steps('dns').dnsMode, 'new')]"
+          },
+          {
+            "name": "zonesApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "POST",
+              "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+              "body": {
+                "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net') | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | project id, name, resourceGroup, subscription = coalesce(subscriptionName, subscriptionId) | order by subscription asc, resourceGroup asc"
+              }
+            }
+          },
+          {
+            "name": "siteZone",
             "type": "Microsoft.Common.DropDown",
-            "label": "Private endpoint subnet",
-            "toolTip": "The private endpoints of the web app, PostgreSQL and Key Vault (three IP addresses). The list shows subnets without delegation.",
+            "label": "Zone privatelink.azurewebsites.net",
+            "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
             "filter": true,
             "constraints": {
               "required": true,
-              "allowedValues": "[map(filter(coalesce(steps('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+              "allowedValues": "[map(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
             },
-            "visible": true
+            "visible": "[equals(steps('dns').dnsMode, 'existing')]"
           },
           {
-            "name": "sameSubnet",
+            "name": "siteZoneNone",
             "type": "Microsoft.Common.InfoBox",
             "options": {
-              "style": "Error",
-              "text": "Choose two different subnets. The App Service subnet is only for App Service."
+              "style": "Warning",
+              "text": "No zone privatelink.azurewebsites.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
             },
-            "visible": "[and(not(empty(steps('network').appSubnet)), equals(steps('network').appSubnet, steps('network').endpointSubnet))]"
+            "visible": "[and(equals(steps('dns').dnsMode, 'existing'), not(empty(steps('dns').zonesApi)), empty(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net'))))]"
           },
           {
-            "name": "dns",
-            "type": "Microsoft.Common.Section",
-            "label": "Private DNS zones",
-            "elements": [
-              {
-                "name": "dnsMode",
-                "type": "Microsoft.Common.OptionsGroup",
-                "label": "Private DNS zones",
-                "defaultValue": "Create new zones",
-                "toolTip": "New zones: the template creates privatelink.azurewebsites.net, privatelink.postgres.database.azure.com and privatelink.vaultcore.azure.net in the resource group and links them to the virtual network. Existing zones: your central zones, for example in a hub subscription.",
-                "constraints": {
-                  "allowedValues": [
-                    { "label": "Create new zones", "value": "new" },
-                    { "label": "Use existing zones", "value": "existing" }
-                  ],
-                  "required": true
-                }
-              },
-              {
-                "name": "customDns",
-                "type": "Microsoft.Common.InfoBox",
-                "options": {
-                  "style": "Warning",
-                  "text": "[concat('This virtual network uses custom DNS servers (', string(steps('network').vnetApi.properties.dhcpOptions.dnsServers), '). New zones in this resource group are linked only to this virtual network, so these DNS servers do not see them. Use the existing zones that your DNS servers resolve.')]"
-                },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'new'), not(empty(steps('network').vnetApi.properties.dhcpOptions.dnsServers)))]"
-              },
-              {
-                "name": "newZonesInfo",
-                "type": "Microsoft.Common.InfoBox",
-                "options": {
-                  "style": "Info",
-                  "text": "Users open the portal from your network. Your DNS must resolve <App name>.azurewebsites.net to the private endpoint, for example with a conditional forwarder for privatelink.azurewebsites.net to an Azure DNS resolver."
-                },
-                "visible": "[equals(steps('network').dns.dnsMode, 'new')]"
-              },
-              {
-                "name": "zonesApi",
-                "type": "Microsoft.Solutions.ArmApiControl",
-                "request": {
-                  "method": "POST",
-                  "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
-                  "body": {
-                    "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net') | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | project id, name, resourceGroup, subscription = coalesce(subscriptionName, subscriptionId) | order by subscription asc, resourceGroup asc"
-                  }
-                }
-              },
-              {
-                "name": "siteZone",
-                "type": "Microsoft.Common.DropDown",
-                "label": "Zone privatelink.azurewebsites.net",
-                "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
-                "filter": true,
-                "constraints": {
-                  "required": true,
-                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
-                },
-                "visible": "[equals(steps('network').dns.dnsMode, 'existing')]"
-              },
-              {
-                "name": "siteZoneNone",
-                "type": "Microsoft.Common.InfoBox",
-                "options": {
-                  "style": "Warning",
-                  "text": "No zone privatelink.azurewebsites.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
-                },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), not(empty(steps('network').dns.zonesApi)), empty(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net'))))]"
-              },
-              {
-                "name": "postgresZone",
-                "type": "Microsoft.Common.DropDown",
-                "label": "Zone privatelink.postgres.database.azure.com",
-                "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
-                "filter": true,
-                "constraints": {
-                  "required": true,
-                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
-                },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL'))]"
-              },
-              {
-                "name": "postgresZoneNone",
-                "type": "Microsoft.Common.InfoBox",
-                "options": {
-                  "style": "Warning",
-                  "text": "No zone privatelink.postgres.database.azure.com found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
-                },
-                "visible": "[and(and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), not(empty(steps('network').dns.zonesApi)), empty(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com'))))]"
-              },
-              {
-                "name": "vaultZone",
-                "type": "Microsoft.Common.DropDown",
-                "label": "Zone privatelink.vaultcore.azure.net",
-                "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
-                "filter": true,
-                "constraints": {
-                  "required": true,
-                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
-                },
-                "visible": "[equals(steps('network').dns.dnsMode, 'existing')]"
-              },
-              {
-                "name": "vaultZoneNone",
-                "type": "Microsoft.Common.InfoBox",
-                "options": {
-                  "style": "Warning",
-                  "text": "No zone privatelink.vaultcore.azure.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
-                },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), not(empty(steps('network').dns.zonesApi)), empty(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
-              }
-            ]
+            "name": "postgresZone",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Zone privatelink.postgres.database.azure.com",
+            "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
+            },
+            "visible": "[and(equals(steps('dns').dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL'))]"
+          },
+          {
+            "name": "postgresZoneNone",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "No zone privatelink.postgres.database.azure.com found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
+            },
+            "visible": "[and(and(equals(steps('dns').dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), not(empty(steps('dns').zonesApi)), empty(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com'))))]"
+          },
+          {
+            "name": "vaultZone",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Zone privatelink.vaultcore.azure.net",
+            "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
+            },
+            "visible": "[equals(steps('dns').dnsMode, 'existing')]"
+          },
+          {
+            "name": "vaultZoneNone",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "No zone privatelink.vaultcore.azure.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
+            },
+            "visible": "[and(equals(steps('dns').dnsMode, 'existing'), not(empty(steps('dns').zonesApi)), empty(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
           }
         ]
       },
@@ -487,11 +559,11 @@
       "appServicePlanSku": "[basics('appServicePlanSku')]",
       "clientId": "[basics('clientId')]",
       "clientSecret": "[basics('clientSecret')]",
-      "appSubnetResourceId": "[steps('network').appSubnet]",
-      "privateEndpointSubnetResourceId": "[steps('network').endpointSubnet]",
-      "webAppPrivateDnsZoneResourceId": "[if(equals(steps('network').dns.dnsMode, 'existing'), steps('network').dns.siteZone, '')]",
-      "postgresPrivateDnsZoneResourceId": "[if(and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), steps('network').dns.postgresZone, '')]",
-      "keyVaultPrivateDnsZoneResourceId": "[if(equals(steps('network').dns.dnsMode, 'existing'), steps('network').dns.vaultZone, '')]",
+      "appSubnetResourceId": "[basics('network').appSubnet]",
+      "privateEndpointSubnetResourceId": "[basics('network').endpointSubnet]",
+      "webAppPrivateDnsZoneResourceId": "[if(equals(steps('dns').dnsMode, 'existing'), steps('dns').siteZone, '')]",
+      "postgresPrivateDnsZoneResourceId": "[if(and(equals(steps('dns').dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), steps('dns').postgresZone, '')]",
+      "keyVaultPrivateDnsZoneResourceId": "[if(equals(steps('dns').dnsMode, 'existing'), steps('dns').vaultZone, '')]",
       "databaseServer": "[steps('database').databaseServer]",
       "databaseAuthentication": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), steps('database').databaseAuthentication, 'ManagedIdentity')]",
       "postgresAdminPassword": "[if(and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(steps('database').databaseAuthentication, 'Password')), steps('database').postgresAdminPassword, '')]",
