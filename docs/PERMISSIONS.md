@@ -172,13 +172,17 @@ In many organizations the network is managed centrally: the virtual network is i
 | Adds the DNS record of the Key Vault private endpoint to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.vaultcore.azure.net` |
 | Option D: adds the DNS records of the web app private endpoint (`<app-name>` and `<app-name>.scm`) to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.azurewebsites.net` |
 | Option D with `keyVaultResourceGroup`: creates the Key Vault, its private endpoint and the role assignment of the identity in another resource group | write and `Microsoft.Authorization/roleAssignments/write` | **Contributor** and **Role Based Access Control Administrator** on that resource group |
+| Option D with `existingKeyVaultResourceId`: adds two secrets to your existing vault and gives the identity Key Vault Secrets User on them (or on the vault) | `Microsoft.KeyVault/vaults/secrets/write` and `Microsoft.Authorization/roleAssignments/write` | **Key Vault Contributor** (or Contributor) and **Role Based Access Control Administrator** on the vault |
+| Option D with `existingContainerRegistryResourceId`: gives the identity the pull role on your existing registry | `Microsoft.Authorization/roleAssignments/write` | **Role Based Access Control Administrator** on the registry |
+| Option D: creates a private endpoint for your existing vault or registry (`existingKeyVaultPrivateEndpoint`, `existingContainerRegistryPrivateEndpoint`) | `.../privateEndpointConnectionsApproval/action` on the vault or registry | **Contributor** on the vault or registry (otherwise the connection waits for approval) |
+| Option D, container image: adds the DNS records of the registry private endpoint (registry and data endpoint) to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.azurecr.io` |
 | PostgreSQL adds its DNS record to an existing zone | write on the zone | **Private DNS Zone Contributor** on the PostgreSQL zone |
 
 Owner on the subscription of the portal does not give these rights when the network or the zones are in another subscription. The error is `LinkedAuthorizationFailed` (section 9). In this case the private endpoint itself is created, and only its DNS record fails.
 
 Before the session, agree with the network team:
 
-- the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger). Option D needs two: the app subnet and the private endpoint subnet (three private endpoints);
+- the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger). Option D needs two: the app subnet and the private endpoint subnet (three private endpoints, four with a new container registry);
 - option D: how users and the deployment computer resolve `<app-name>.azurewebsites.net` and `<app-name>.scm.azurewebsites.net` to the private endpoint (for example a conditional forwarder for `privatelink.azurewebsites.net`);
 - who adds the DNS records if you get no rights on the hub zones;
 - outbound internet access from the app subnet (firewall rules for `login.microsoftonline.com`, `graph.microsoft.com`, `management.azure.com`, `api.loganalytics.io`). With the private network option, all outbound traffic of the web app goes through the virtual network;
@@ -201,8 +205,8 @@ Policies can stop a deployment, or change resources after a successful deploymen
 
 The private network option keeps the client secret and the database connection string in Key Vault.
 
-- **Deployment.** The Bicep template writes the secrets through Azure Resource Manager. Contributor on the resource group is enough. You need no Key Vault data role and no network access to the vault for the deployment.
-- **The web app** reads the secrets with its user-assigned managed identity and the role `Key Vault Secrets User`. The template assigns this role before it creates the web app.
+- **Deployment.** The Bicep template writes the secrets through Azure Resource Manager. Contributor on the resource group is enough. You need no Key Vault data role and no network access to the vault for the deployment. With your existing vault (option D, `existingKeyVaultResourceId`) you need Key Vault Contributor (or Contributor) and Role Based Access Control Administrator on that vault, and the vault must use Azure RBAC.
+- **The web app** reads the secrets with its user-assigned managed identity and the role `Key Vault Secrets User`. The template assigns this role before it creates the web app. In an existing vault the role covers only the two secrets of the portal by default.
 - **Read or change a secret yourself later** (for example a new client secret): Owner and Contributor do **not** give access to secret values. You need **Key Vault Secrets Officer** on the vault, and a network path to the private endpoint (a machine in the virtual network or a connected network). Or run the Bicep template again with the new value.
 
 ## 7. Two people: Entra ID administrator and Azure administrator
@@ -245,6 +249,7 @@ The id of the Tenant Root Group is the tenant id. Often nobody has a role there.
 | User-assigned managed identity and its federated credential (`deploy-appservice.yml`) | **Managed Identity Contributor** (or Contributor) on the resource group |
 | Give the identity **Website Contributor** on the web app | **Role Based Access Control Administrator**, **User Access Administrator** or **Owner** on the web app or the resource group |
 | Deploy to App Service from the workflow | The workflow identity needs **Website Contributor** on the web app. For the Bicep deployment, the same rights as a person (section 1). |
+| Container image (`deploy-appservice-container.yml`): push the image | The workflow identity needs **AcrPush** on the registry, or **Container Registry Repository Writer** when the registry uses ABAC repository permissions. To assign it: **Role Based Access Control Administrator** on the registry. |
 
 ### Azure DevOps
 

@@ -1,6 +1,9 @@
 # Build, test and deploy the portal to Azure App Service (code deployment, no container registry).
 # The web app, the database and the other Azure resources come from deploy/bicep/appservice.bicep
 # (or appservice.json in the Azure portal: "Deploy a custom template"). This workflow only deploys the code.
+# For a web app that runs the image from Azure Container Registry (appservice-existing-network.bicep with
+# deploymentType = Container), use deploy-appservice-container.yml.
+# The NuGet audit in Directory.Build.props stops the build when a package has a known high or critical vulnerability.
 #
 # Sign-in to Azure: OpenID Connect with a user-assigned managed identity. No secret is stored in GitHub.
 # The identity needs the role "Website Contributor" on the web app, and a federated credential for this

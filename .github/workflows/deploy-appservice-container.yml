@@ -1,0 +1,111 @@
+# Build the portal image, push it to Azure Container Registry and run it on Azure App Service (Web App for Containers).
+# For the template deploy/bicep/appservice-existing-network.bicep with deploymentType = Container: the web app pulls the image
+# through the VNet with its managed identity. Microsoft Defender for Containers or Defender CSPM scans the images in the registry.
+# The NuGet audit in Directory.Build.props stops the build when a package has a known high or critical vulnerability.
+#
+# Sign-in to Azure: OpenID Connect with a user-assigned managed identity, as in deploy-appservice.yml. No secret is stored in GitHub.
+# The identity needs:
+#   - the role "Website Contributor" on the web app,
+#   - the role "AcrPush" on the registry, or "Container Registry Repository Writer" when the registry uses ABAC repository
+#     permissions (az acr show --name <registry> --query roleAssignmentMode returns AbacRepositoryPermissions),
+#   - a federated credential for this repository and the environment "production".
+#
+# Settings > Secrets and variables > Actions > Variables (repository or environment "production"):
+#   AZURE_CLIENT_ID        client id of the managed identity
+#   AZURE_TENANT_ID        tenant id
+#   AZURE_SUBSCRIPTION_ID  subscription of the web app
+#   AZURE_RESOURCE_GROUP   resource group of the web app
+#   APPSERVICE_NAME        name of the web app
+#   ACR_LOGIN_SERVER       login server of the registry, for example crcontoso.azurecr.io (template output containerRegistryLoginServer)
+#   RUNNER_LABELS          optional, JSON list of runner labels. Default: ["self-hosted", "linux", "access-review"].
+#
+# Runner: in your network, with Docker and Azure CLI. The runner image in deploy/github-runner uses the Docker engine of the host;
+# build it with --build-arg AZURE_CLI=true. The runner must reach the private endpoints of the registry and the web app, and
+# mcr.microsoft.com and api.nuget.org for the build. The .NET SDK is installed by the workflow.
+name: deploy-appservice-container
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-appservice
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS || '["self-hosted", "linux", "access-review"]') }}
+    environment:
+      name: production
+      url: https://${{ vars.APPSERVICE_NAME }}.azurewebsites.net
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      APP_NAME: ${{ vars.APPSERVICE_NAME }}
+      LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      REPOSITORY: access-review-portal
+    steps:
+      # Keeps the Azure CLI sign-in and the registry token inside the job folder: a self-hosted runner does not keep them.
+      - name: Azure CLI and Docker folders for this job
+        run: |
+          echo "AZURE_CONFIG_DIR=$RUNNER_TEMP/azure-cli" >> "$GITHUB_ENV"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Unit tests
+        run: dotnet test AccessReviewPortal.slnx -c Release
+
+      - name: Build the image
+        run: |
+          if [ -z "$LOGIN_SERVER" ]; then echo "::error::Set the variable ACR_LOGIN_SERVER, for example crcontoso.azurecr.io"; exit 1; fi
+          image="$LOGIN_SERVER/$REPOSITORY:${GITHUB_SHA::12}"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          docker build --target runtime --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$image" -t "$LOGIN_SERVER/$REPOSITORY:latest" .
+
+      - name: Sign in to Azure (OpenID Connect)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push the image
+        run: |
+          az acr login --name "${LOGIN_SERVER%%.*}" --only-show-errors
+          docker push "$IMAGE"
+          docker push "$LOGIN_SERVER/$REPOSITORY:latest"
+
+      # The web app pulls the image with its managed identity and restarts.
+      - name: Switch the web app to the image
+        run: |
+          az webapp config set --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+            --linux-fx-version "DOCKER|$IMAGE" --only-show-errors --output none
+          echo "The web app runs $IMAGE after the restart."
+
+      - name: Health check
+        run: |
+          url="https://$APP_NAME.azurewebsites.net/healthz"
+          # The old container answers until the restart: wait for it first.
+          sleep 60
+          for i in $(seq 1 48); do
+            if [ "$(curl -fsS --max-time 20 "$url" 2>/dev/null)" = "ok" ]; then echo "The portal answers: $url"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::No 'ok' from $url after 9 minutes. Container log: az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_NAME"
+          exit 1
+
+      - name: Sign out of Azure and the registry
+        if: always()
+        run: |
+          docker logout "$LOGIN_SERVER" > /dev/null 2>&1 || true
+          az account clear || true

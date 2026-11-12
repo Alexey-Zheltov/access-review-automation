@@ -6,16 +6,24 @@
 // The template creates no virtual network and no subnets. You give two existing subnets in the region of the deployment:
 //   - app subnet: VNet integration of the web app. All outbound traffic of the web app goes through your network.
 //     Only for App Service: delegated to Microsoft.Web/serverFarms before the deployment. /28 or larger, /26 recommended.
-//   - private endpoint subnet: the private endpoints of the web app, PostgreSQL and Key Vault.
+//   - private endpoint subnet: the private endpoints of the web app, PostgreSQL, Key Vault and the container registry.
 // No public endpoints:
 //   - web app: private endpoint, public network access disabled. Users, deployments and the Kudu console work only from
 //     your network. Your DNS must resolve <appName>.azurewebsites.net and <appName>.scm.azurewebsites.net to the private endpoint.
 //   - PostgreSQL Flexible Server: private endpoint, public network access disabled.
-//   - Key Vault (new, in this resource group or in keyVaultResourceGroup): private endpoint, public network access disabled.
+//   - Key Vault: a new vault (in this resource group or in keyVaultResourceGroup) with a private endpoint and no public access
+//     (keyvault-private.bicep), or your existing vault that uses Azure RBAC (existingKeyVaultResourceId, keyvault-existing.bicep).
 //     The web app reads the client secret and the connection string through Key Vault references with the user-assigned
-//     managed identity id-<appName>, which gets Key Vault Secrets User on this vault (keyvault-private.bicep).
-// Private DNS zones privatelink.azurewebsites.net, privatelink.postgres.database.azure.com, privatelink.vaultcore.azure.net:
-// your existing zones (for example in a hub subscription), or new zones in this resource group, linked to the VNet of the app subnet.
+//     managed identity id-<appName>, which gets Key Vault Secrets User.
+// Code of the portal (deploymentType):
+//   Code (default) - the workflow deploy-appservice.yml uploads the built app (zip) to the built-in .NET 10 runtime.
+//   Container - the web app runs the image <registry>/access-review-portal from Azure Container Registry and pulls it through
+//     the VNet with id-<appName>. A new registry (Premium, private endpoint, no public access, no admin user) or your existing
+//     one (existingContainerRegistryResourceId). The workflow deploy-appservice-container.yml builds and pushes the image.
+//     Microsoft Defender for Containers or Defender CSPM scans the images in the registry.
+// Private DNS zones privatelink.azurewebsites.net, privatelink.postgres.database.azure.com, privatelink.vaultcore.azure.net and
+// privatelink.azurecr.io: your existing zones (for example in a hub subscription), or new zones in this resource group, linked to
+// the VNet of the app subnet. A zone is needed only for a private endpoint that the template creates.
 //
 // Database (databaseServer):
 //   AzurePostgreSQL (default) - the template creates the server and the database accessreview.
@@ -39,8 +47,17 @@ param location string = resourceGroup().location
 @allowed(['B1', 'B2', 'B3', 'P0v3', 'P1v3', 'P2v3', 'P3v3', 'P1mv3', 'P2mv3'])
 param appServicePlanSku string = 'P0v3'
 
-@description('Zone redundancy of the App Service plan: two instances in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance.')
+@description('Zone redundancy of the App Service plan: the instances run in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance.')
 param appServiceZoneRedundant bool = false
+
+@description('Instances of the App Service plan. With zone redundancy at least 2: Azure spreads them over the availability zones of the region, so 3 instances in a region with three zones run one in each zone.')
+@minValue(1)
+@maxValue(10)
+param appServiceInstanceCount int = 1
+
+@description('Code: the workflow deploy-appservice.yml uploads the built app to the built-in .NET 10 runtime. Container: the web app runs the image from Azure Container Registry; the workflow deploy-appservice-container.yml builds and pushes it.')
+@allowed(['Code', 'Container'])
+param deploymentType string = 'Code'
 
 @description('Microsoft Entra tenant id of the app registration.')
 param tenantId string = subscription().tenantId
@@ -64,8 +81,11 @@ param webAppPrivateDnsZoneResourceId string = ''
 @description('AzurePostgreSQL only: existing private DNS zone privatelink.postgres.database.azure.com. Empty = create one in this resource group and link it to the VNet of the app subnet.')
 param postgresPrivateDnsZoneResourceId string = ''
 
-@description('Existing private DNS zone privatelink.vaultcore.azure.net. Empty = create one in this resource group and link it to the VNet of the app subnet.')
+@description('Existing private DNS zone privatelink.vaultcore.azure.net. Empty = create one in this resource group and link it to the VNet of the app subnet. Not needed for an existing vault without a new private endpoint.')
 param keyVaultPrivateDnsZoneResourceId string = ''
+
+@description('Container: existing private DNS zone privatelink.azurecr.io. Empty = create one in this resource group and link it to the VNet of the app subnet. Not needed for an existing registry without a new private endpoint.')
+param containerRegistryPrivateDnsZoneResourceId string = ''
 
 @description('AzurePostgreSQL: the template creates Azure Database for PostgreSQL Flexible Server. ExistingServer: your own PostgreSQL server, for example on a VM; the template creates no database server.')
 @allowed(['AzurePostgreSQL', 'ExistingServer'])
@@ -134,6 +154,29 @@ param keyVaultResourceGroup string = ''
 @description('Purge protection of the Key Vault. With it, a deleted vault name stays reserved until the retention period ends.')
 param enablePurgeProtection bool = true
 
+@description('Resource id of an existing Key Vault that uses Azure RBAC (permission model "Azure role-based access control"), in any subscription of the tenant. The template adds the secrets <appName>-client-secret and <appName>-db-connection and gives id-<appName> the role Key Vault Secrets User. It changes nothing else in the vault. Empty = the template creates a new vault (keyVaultName, keyVaultResourceGroup, enablePurgeProtection).')
+param existingKeyVaultResourceId string = ''
+
+@description('Existing Key Vault: scope of the role Key Vault Secrets User for id-<appName>. Secrets = only the two secrets of the portal (for a vault that other apps also use). Vault = all secrets of the vault.')
+@allowed(['Secrets', 'Vault'])
+param existingKeyVaultAccess string = 'Secrets'
+
+@description('Existing Key Vault: create a private endpoint for the vault in the private endpoint subnet, with its record in the zone privatelink.vaultcore.azure.net. false = the vault already has a private endpoint that the App Service subnet reaches, for example in a hub network with central DNS zones.')
+param existingKeyVaultPrivateEndpoint bool = false
+
+@description('Container: resource id of an existing Azure Container Registry, in any subscription of the tenant. id-<appName> gets the pull role: AcrPull, or Container Registry Repository Reader for a registry with ABAC repository permissions. Empty = the template creates a new registry (Premium, private endpoint, no public access, no admin user).')
+param existingContainerRegistryResourceId string = ''
+
+@description('Container with an existing registry: create a private endpoint for the registry in the private endpoint subnet, with its records in the zone privatelink.azurecr.io. false = the registry already has a private endpoint that the App Service subnet reaches.')
+param existingContainerRegistryPrivateEndpoint bool = false
+
+@description('Container with a new registry: registry name (5-50 letters and digits, globally unique). Empty = cr<unique string>.')
+@maxLength(50)
+param containerRegistryName string = ''
+
+@description('Container: repository and tag of the portal image in the registry. The workflow deploy-appservice-container.yml pushes the tags <commit> and latest, and switches the web app to <commit>.')
+param containerImage string = 'access-review-portal:latest'
+
 param tags object = {
   workload: 'access-review'
 }
@@ -145,8 +188,33 @@ var useManagedIdentity = createPostgres && databaseAuthentication == 'ManagedIde
 var identityName = 'id-${appName}'
 var postgresSkuTier = startsWith(postgresSkuName, 'Standard_B') ? 'Burstable' : (startsWith(postgresSkuName, 'Standard_E') ? 'MemoryOptimized' : 'GeneralPurpose')
 var serverName = empty(postgresServerName) ? 'psql-${appName}' : postgresServerName
-var vaultName = empty(keyVaultName) ? 'kv-${uniqueString(resourceGroup().id, appName)}' : keyVaultName
-var vaultResourceGroup = empty(keyVaultResourceGroup) ? resourceGroup().name : keyVaultResourceGroup
+
+// Key Vault: a new vault (keyvault-private.bicep) or an existing one (keyvault-existing.bicep). In an existing vault the secret
+// names carry the app name, because other apps may use the same vault.
+var useExistingVault = !empty(existingKeyVaultResourceId)
+var existingVaultIdParts = split(existingKeyVaultResourceId, '/')
+var vaultSubscriptionId = useExistingVault ? existingVaultIdParts[2] : subscription().subscriptionId
+var vaultResourceGroup = useExistingVault
+  ? existingVaultIdParts[4]
+  : (empty(keyVaultResourceGroup) ? resourceGroup().name : keyVaultResourceGroup)
+var vaultName = useExistingVault
+  ? last(existingVaultIdParts)
+  : (empty(keyVaultName) ? 'kv-${uniqueString(resourceGroup().id, appName)}' : keyVaultName)
+var clientSecretName = useExistingVault ? '${appName}-client-secret' : 'portal-client-secret'
+var connectionSecretName = useExistingVault ? '${appName}-db-connection' : 'portal-db-connection'
+var vaultEndpointNeeded = !useExistingVault || existingKeyVaultPrivateEndpoint
+
+// Container: a new registry (containerregistry-private.bicep) or an existing one (containerregistry-existing.bicep).
+var useContainer = deploymentType == 'Container'
+var useExistingRegistry = useContainer && !empty(existingContainerRegistryResourceId)
+var existingRegistryIdParts = split(existingContainerRegistryResourceId, '/')
+var registrySubscriptionId = useExistingRegistry ? existingRegistryIdParts[2] : subscription().subscriptionId
+var registryResourceGroup = useExistingRegistry ? existingRegistryIdParts[4] : resourceGroup().name
+var registryName = useExistingRegistry
+  ? last(existingRegistryIdParts)
+  : (empty(containerRegistryName) ? 'cr${uniqueString(resourceGroup().id, appName)}' : containerRegistryName)
+var registryLoginServer = '${toLower(registryName)}${environment().suffixes.acrLoginServer}'
+var registryEndpointNeeded = useContainer && (!useExistingRegistry || existingContainerRegistryPrivateEndpoint)
 
 // Both subnets must be subnet resource ids. The check stops the deployment before anything is created.
 var subnetIdPart = '/providers/microsoft.network/virtualnetworks/'
@@ -168,7 +236,9 @@ var badOptions = concat(
   appServiceZoneRedundant && !startsWith(appServicePlanSku, 'P') ? ['appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'] : [],
   createPostgres && postgresHighAvailability != 'Disabled' && postgresSkuTier == 'Burstable' ? ['postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'] : [],
   createPostgres && !empty(postgresStandbyAvailabilityZone) && postgresHighAvailability != 'ZoneRedundant' ? ['postgresStandbyAvailabilityZone needs postgresHighAvailability = ZoneRedundant'] : [],
-  createPostgres && !empty(postgresStandbyAvailabilityZone) && postgresStandbyAvailabilityZone == postgresAvailabilityZone ? ['postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'] : []
+  createPostgres && !empty(postgresStandbyAvailabilityZone) && postgresStandbyAvailabilityZone == postgresAvailabilityZone ? ['postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'] : [],
+  useExistingVault && !(contains(toLower(existingKeyVaultResourceId), '/providers/microsoft.keyvault/vaults/') && length(existingVaultIdParts) == 9) ? ['existingKeyVaultResourceId must be the resource id of a Key Vault (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.KeyVault/vaults/<name>)'] : [],
+  useExistingRegistry && !(contains(toLower(existingContainerRegistryResourceId), '/providers/microsoft.containerregistry/registries/') && length(existingRegistryIdParts) == 9) ? ['existingContainerRegistryResourceId must be the resource id of a container registry (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.ContainerRegistry/registries/<name>)'] : []
 )
 var planSku = empty(badOptions) ? appServicePlanSku : fail('Change these options: ${join(badOptions, '; ')}')
 // lastIndexOf is not case-sensitive.
@@ -176,10 +246,12 @@ var vnetId = substring(appSubnetId, 0, lastIndexOf(appSubnetId, '/subnets/'))
 
 var createSiteZone = empty(webAppPrivateDnsZoneResourceId)
 var createPostgresZone = createPostgres && empty(postgresPrivateDnsZoneResourceId)
-var createVaultZone = empty(keyVaultPrivateDnsZoneResourceId)
+var createVaultZone = vaultEndpointNeeded && empty(keyVaultPrivateDnsZoneResourceId)
+var createRegistryZone = registryEndpointNeeded && empty(containerRegistryPrivateDnsZoneResourceId)
 var siteZoneId = createSiteZone ? siteZone.id : webAppPrivateDnsZoneResourceId
 var postgresZoneId = createPostgresZone ? postgresZone.id : postgresPrivateDnsZoneResourceId
 var vaultZoneId = createVaultZone ? vaultZone.id : keyVaultPrivateDnsZoneResourceId
+var registryZoneId = createRegistryZone ? registryZone.id : containerRegistryPrivateDnsZoneResourceId
 
 // PostgreSQL is created first. Some sizes are not available for every subscription in every region, and Azure reports this
 // (SkuNotAvailable) only when it creates the server. So the zones, the plan and everything after them wait for the server:
@@ -233,6 +305,25 @@ resource vaultZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (createVa
 
 resource vaultZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createVaultZone) {
   parent: vaultZone
+  name: 'link-${appName}'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnetId
+    }
+  }
+}
+
+resource registryZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (createRegistryZone) {
+  name: 'privatelink.azurecr.io'
+  location: 'global'
+  tags: tags
+  dependsOn: [postgres]
+}
+
+resource registryZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createRegistryZone) {
+  parent: registryZone
   name: 'link-${appName}'
   location: 'global'
   properties: {
@@ -324,8 +415,8 @@ var connectionString = !createPostgres
       : 'Host=${postgresHost};Port=5432;Database=${databaseName};Username=${postgresAdminLogin};Password=${postgresAdminPassword};Ssl Mode=VerifyFull'
 
 // ------------------------------------------------------------------------------------------------ secrets
-// Key Vault with a private endpoint only (public network access disabled), in the resource group keyVaultResourceGroup.
-module keyVault 'keyvault-private.bicep' = {
+// New: Key Vault with a private endpoint only (public network access disabled), in the resource group keyVaultResourceGroup.
+module keyVault 'keyvault-private.bicep' = if (!useExistingVault) {
   name: take('keyvault-${vaultName}', 64)
   scope: resourceGroup(vaultResourceGroup)
   params: {
@@ -342,6 +433,127 @@ module keyVault 'keyvault-private.bicep' = {
   }
   dependsOn: [vaultZoneLink]
 }
+
+// Existing: the two secrets and the role Key Vault Secrets User (Azure RBAC), in the resource group of the vault.
+module existingKeyVault 'keyvault-existing.bicep' = if (useExistingVault) {
+  name: take('keyvault-${vaultName}', 64)
+  scope: resourceGroup(vaultSubscriptionId, vaultResourceGroup)
+  params: {
+    vaultName: vaultName
+    clientSecret: clientSecret
+    connectionString: connectionString
+    clientSecretName: clientSecretName
+    connectionSecretName: connectionSecretName
+    access: existingKeyVaultAccess
+    identityId: identity.id
+    identityPrincipalId: identity.properties.principalId
+  }
+}
+
+// Existing vault, optional: a private endpoint in this resource group.
+resource existingVaultEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (useExistingVault && existingKeyVaultPrivateEndpoint) {
+  name: take('pe-${vaultName}-${appName}', 80)
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: endpointSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'vault'
+        properties: {
+          privateLinkServiceId: existingKeyVaultResourceId
+          groupIds: ['vault']
+        }
+      }
+    ]
+  }
+  dependsOn: [postgres]
+}
+
+resource existingVaultEndpointDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (useExistingVault && existingKeyVaultPrivateEndpoint) {
+  parent: existingVaultEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'vault'
+        properties: {
+          privateDnsZoneId: vaultZoneId
+        }
+      }
+    ]
+  }
+  dependsOn: [vaultZoneLink]
+}
+
+// ------------------------------------------------------------------------------------------------ container registry
+// New: Premium registry with a private endpoint and no public access, in this resource group.
+module registry 'containerregistry-private.bicep' = if (useContainer && !useExistingRegistry) {
+  name: take('registry-${registryName}', 64)
+  params: {
+    registryName: registryName
+    location: location
+    tags: tags
+    endpointSubnetId: endpointSubnetId
+    privateDnsZoneId: registryZoneId
+    identityId: identity.id
+    identityPrincipalId: identity.properties.principalId
+  }
+  dependsOn: [registryZoneLink, postgres]
+}
+
+// Existing: the pull role for id-<appName>, in the resource group of the registry.
+module existingRegistry 'containerregistry-existing.bicep' = if (useExistingRegistry) {
+  name: take('registry-${registryName}', 64)
+  scope: resourceGroup(registrySubscriptionId, registryResourceGroup)
+  params: {
+    registryName: registryName
+    identityId: identity.id
+    identityPrincipalId: identity.properties.principalId
+  }
+  dependsOn: [postgres]
+}
+
+// Existing registry, optional: a private endpoint in this resource group (records for the registry and its data endpoints).
+resource existingRegistryEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (useExistingRegistry && existingContainerRegistryPrivateEndpoint) {
+  name: take('pe-${registryName}-${appName}', 80)
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: endpointSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'registry'
+        properties: {
+          privateLinkServiceId: existingContainerRegistryResourceId
+          groupIds: ['registry']
+        }
+      }
+    ]
+  }
+  dependsOn: [postgres]
+}
+
+resource existingRegistryEndpointDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (useExistingRegistry && existingContainerRegistryPrivateEndpoint) {
+  parent: existingRegistryEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'registry'
+        properties: {
+          privateDnsZoneId: registryZoneId
+        }
+      }
+    ]
+  }
+  dependsOn: [registryZoneLink]
+}
+
 // ------------------------------------------------------------------------------------------------ web app
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: 'asp-${appName}'
@@ -350,8 +562,8 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   kind: 'linux'
   sku: {
     name: planSku
-    // Zone redundancy needs at least two instances.
-    capacity: appServiceZoneRedundant ? 2 : 1
+    // Zone redundancy needs at least two instances. Azure spreads them over the zones of the region.
+    capacity: appServiceZoneRedundant ? max(2, appServiceInstanceCount) : appServiceInstanceCount
   }
   properties: {
     reserved: true
@@ -364,15 +576,15 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
   name: appName
   location: location
   tags: tags
-  kind: 'app,linux'
+  kind: useContainer ? 'app,linux,container' : 'app,linux'
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
       '${identity.id}': {}
     }
   }
-  // The identity can read the secrets before the app settings are applied.
-  dependsOn: [keyVault]
+  // The identity can read the secrets and pull the image before the app settings are applied.
+  dependsOn: [keyVault, existingKeyVault, existingVaultEndpointDns, registry, existingRegistry, existingRegistryEndpointDns]
   properties: {
     serverFarmId: plan.id
     keyVaultReferenceIdentity: identity.id
@@ -382,9 +594,13 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
     // Blazor Server keeps the user session on one instance.
     clientAffinityEnabled: true
     virtualNetworkSubnetId: appSubnetId
+    // Container: the image comes through the VNet, from the private endpoint of the registry.
+    vnetImagePullEnabled: useContainer
     siteConfig: {
-      linuxFxVersion: 'DOTNETCORE|10.0'
-      appCommandLine: 'dotnet AccessReviewPortal.dll'
+      linuxFxVersion: useContainer ? 'DOCKER|${registryLoginServer}/${containerImage}' : 'DOTNETCORE|10.0'
+      appCommandLine: useContainer ? '' : 'dotnet AccessReviewPortal.dll'
+      acrUseManagedIdentityCreds: useContainer
+      acrUserManagedIdentityID: useContainer ? identity.properties.clientId : null
       // The monthly and quarterly schedules run inside the app, so it must not be unloaded when idle.
       alwaysOn: true
       webSocketsEnabled: true
@@ -401,10 +617,17 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
 resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
   parent: webApp
   name: 'appsettings'
-  properties: {
-    SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+  properties: union(useContainer
+    ? {
+        // The image listens on 8080 (ASPNETCORE_HTTP_PORTS in the Dockerfile).
+        WEBSITES_PORT: '8080'
+        WEBSITES_ENABLE_APP_SERVICE_STORAGE: 'false'
+      }
+    : {
+        SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+      }, {
     ASPNETCORE_FORWARDEDHEADERS_ENABLED: 'true'
-    // One instance: the schema is migrated when the app starts.
+    // The schema is migrated when the app starts. EF Core locks the migration history, so several instances can start together.
     Database__ApplyMigrationsOnStartup: 'true'
     Database__Authentication: useManagedIdentity ? 'ManagedIdentity' : 'Password'
     Database__ManagedIdentityClientId: useManagedIdentity ? identity.properties.clientId : ''
@@ -413,10 +636,10 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     Portal__PublicBaseUrl: portalUrl
     AzureAd__TenantId: tenantId
     AzureAd__ClientId: clientId
-    AzureAd__ClientSecret: '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=portal-client-secret)'
-    ConnectionStrings__DefaultConnection: '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=portal-db-connection)'
-  }
-  dependsOn: [keyVault, postgresEndpointDns]
+    AzureAd__ClientSecret: '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=${clientSecretName})'
+    ConnectionStrings__DefaultConnection: '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=${connectionSecretName})'
+  })
+  dependsOn: [keyVault, existingKeyVault, existingVaultEndpointDns, postgresEndpointDns]
 }
 
 resource logs 'Microsoft.Web/sites/config@2024-04-01' = {
@@ -502,3 +725,9 @@ output postgresUser string = useManagedIdentity ? identityName : (createPostgres
 output keyVaultName string = vaultName
 output keyVaultResourceGroup string = vaultResourceGroup
 output identityName string = identityName
+@description('Container: login server of the registry, for the workflow variable ACR_LOGIN_SERVER.')
+output containerRegistryLoginServer string = useContainer ? registryLoginServer : ''
+@description('Container: resource id of the registry. The GitHub identity needs AcrPush on it (Container Registry Repository Writer with ABAC repository permissions).')
+output containerRegistryId string = useContainer
+  ? resourceId(registrySubscriptionId, registryResourceGroup, 'Microsoft.ContainerRegistry/registries', registryName)
+  : ''

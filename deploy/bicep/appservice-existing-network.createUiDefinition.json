@@ -101,7 +101,7 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "The template creates three private endpoints in this subnet: web app, PostgreSQL and Key Vault. None of them has public access."
+              "text": "The template creates its private endpoints in this subnet: web app, PostgreSQL, Key Vault and, for a container, the registry. None of them has public access."
             }
           },
           {
@@ -198,16 +198,20 @@
             "type": "Microsoft.Common.OptionsGroup",
             "label": "Zone redundancy",
             "defaultValue": "Off (1 instance)",
-            "toolTip": "On: two instances of the web app in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan and a region with availability zones. Decide before the first deployment: an existing plan cannot always be changed later.",
+            "toolTip": "Azure spreads the instances over the availability zones of the region and chooses the zones. App Service has no setting to choose a zone. Needs a Premium plan and a region with availability zones. Decide before the first deployment: an existing plan cannot always be changed later.",
             "constraints": {
               "allowedValues": [
                 {
                   "label": "Off (1 instance)",
-                  "value": false
+                  "value": 1
                 },
                 {
-                  "label": "On (2 instances in different zones)",
-                  "value": true
+                  "label": "On: 2 instances in 2 zones",
+                  "value": 2
+                },
+                {
+                  "label": "On: 3 instances, one in each zone",
+                  "value": 3
                 }
               ],
               "required": true
@@ -228,7 +232,7 @@
               "style": "Error",
               "text": "Zone redundancy needs a Premium plan (P0v3 or larger). Choose a P plan size."
             },
-            "visible": "[and(basics('app').zoneRedundant, not(contains(basics('app').appServicePlanSku, 'P')))]"
+            "visible": "[and(greater(basics('app').zoneRedundant, 1), not(contains(basics('app').appServicePlanSku, 'P')))]"
           },
           {
             "name": "zoneRedundantRegion",
@@ -237,7 +241,45 @@
               "style": "Error",
               "text": "This region has no availability zones. Choose Off, or another region."
             },
-            "visible": "[and(basics('app').zoneRedundant, not(empty(filter(coalesce(basics('app').locationsApi.value, parse('[]')), (l) => and(equals(l.name, location()), empty(coalesce(l.availabilityZoneMappings, parse('[]'))))))))]"
+            "visible": "[and(greater(basics('app').zoneRedundant, 1), not(empty(filter(coalesce(basics('app').locationsApi.value, parse('[]')), (l) => and(equals(l.name, location()), empty(coalesce(l.availabilityZoneMappings, parse('[]'))))))))]"
+          },
+          {
+            "name": "zoneRedundantTwo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "This region has only two availability zones. Azure puts two of the three instances in the same zone."
+            },
+            "visible": "[and(equals(basics('app').zoneRedundant, 3), not(empty(filter(coalesce(basics('app').locationsApi.value, parse('[]')), (l) => and(equals(l.name, location()), equals(length(coalesce(l.availabilityZoneMappings, parse('[]'))), 2))))))]"
+          },
+          {
+            "name": "deploymentType",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Deployment",
+            "defaultValue": "Code package (built-in .NET 10)",
+            "toolTip": "Code package: the workflow deploy-appservice.yml uploads the built app. Container image: the web app runs the image from Azure Container Registry, where Microsoft Defender for Cloud scans it; the workflow deploy-appservice-container.yml builds and pushes it.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Code package (built-in .NET 10)",
+                  "value": "Code"
+                },
+                {
+                  "label": "Container image from Azure Container Registry",
+                  "value": "Container"
+                }
+              ]
+            }
+          },
+          {
+            "name": "containerInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The web app pulls the image through your network with its managed identity id-<App name>. Choose the registry in the section Container registry. Until the first run of the workflow deploy-appservice-container.yml, the web app has no image and answers 503."
+            },
+            "visible": "[equals(basics('app').deploymentType, 'Container')]"
           },
           {
             "name": "clientId",
@@ -669,6 +711,418 @@
         ]
       },
       {
+        "name": "keyVault",
+        "type": "Microsoft.Common.Section",
+        "label": "Key Vault",
+        "elements": [
+          {
+            "name": "keyVaultInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The web app reads the client secret and the database connection string from Key Vault with its managed identity id-<App name>, which gets the role Key Vault Secrets User."
+            }
+          },
+          {
+            "name": "vaultMode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Key Vault",
+            "defaultValue": "Create a new Key Vault",
+            "toolTip": "A new vault only for the portal, or your existing vault that uses Azure RBAC.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Create a new Key Vault",
+                  "value": "new"
+                },
+                {
+                  "label": "Use an existing Key Vault",
+                  "value": "existing"
+                }
+              ]
+            }
+          },
+          {
+            "name": "networkAccess",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Network access",
+            "defaultValue": "Private endpoint only (public network access disabled)",
+            "toolTip": "The Key Vault gets a private endpoint in the private endpoint subnet (Network section) and its DNS record in the zone privatelink.vaultcore.azure.net (Private DNS zones section). Public network access is disabled, with no exceptions.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Private endpoint only (public network access disabled)",
+                  "value": "PrivateEndpoint"
+                }
+              ],
+              "required": true
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'new')]"
+          },
+          {
+            "name": "resourceGroupMode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Resource group",
+            "defaultValue": "Same resource group as the portal",
+            "toolTip": "The Key Vault, its private endpoint and the role assignment go to this resource group.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Same resource group as the portal",
+                  "value": "same"
+                },
+                {
+                  "label": "Another resource group",
+                  "value": "other"
+                }
+              ],
+              "required": true
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'new')]"
+          },
+          {
+            "name": "resourceGroupsApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(subscription().id, '/resourcegroups?api-version=2021-04-01')]"
+            }
+          },
+          {
+            "name": "resourceGroup",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Key Vault resource group",
+            "toolTip": "An existing resource group in the subscription chosen above.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(coalesce(basics('keyVault').resourceGroupsApi.value, parse('[]')), (g) => parse(concat('{\"label\":\"', g.name, '\",\"value\":\"', g.name, '\"}')))]"
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'new'), equals(basics('keyVault').resourceGroupMode, 'other'))]"
+          },
+          {
+            "name": "resourceGroupInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "You need Contributor and Role Based Access Control Administrator on this resource group too."
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'new'), equals(basics('keyVault').resourceGroupMode, 'other'))]"
+          },
+          {
+            "name": "keyVaultName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Key Vault name",
+            "placeholder": "Empty: a name derived from the resource group and the app name",
+            "toolTip": "3-24 characters, unique in Azure. Empty: kv-<unique string>.",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$",
+              "validationMessage": "3-24 characters: letters, digits and hyphens. Starts with a letter."
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'new')]"
+          },
+          {
+            "name": "enablePurgeProtection",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Purge protection",
+            "toolTip": "With purge protection, a deleted vault and its name stay reserved for 90 days. Recommended for production.",
+            "defaultValue": true,
+            "visible": "[equals(basics('keyVault').vaultMode, 'new')]"
+          },
+          {
+            "name": "vaultsApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "POST",
+              "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+              "body": {
+                "query": "resources | where type =~ 'microsoft.keyvault/vaults' | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' | project subscriptionId, resourceGroup = tolower(name), groupName = name) on subscriptionId, resourceGroup | project id, name, resourceGroup = coalesce(groupName, resourceGroup), subscription = coalesce(subscriptionName, subscriptionId), location, rbac = tostring(properties.enableRbacAuthorization), publicAccess = iff(isempty(tostring(properties.publicNetworkAccess)), 'Enabled', tostring(properties.publicNetworkAccess)), endpoints = coalesce(array_length(properties.privateEndpointConnections), 0) | order by name asc",
+                "options": {
+                  "$top": 1000
+                }
+              }
+            }
+          },
+          {
+            "name": "existingVault",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Existing Key Vault",
+            "filter": true,
+            "toolTip": "The vaults in the subscriptions that you can read: name (resource group, subscription).",
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(coalesce(basics('keyVault').vaultsApi.data, parse('[]')), (v) => parse(concat('{\"label\":\"', v.name, ' (', v.resourceGroup, ', ', v.subscription, ')\",\"value\":\"', v.id, '\"}')))]"
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'existing')]"
+          },
+          {
+            "name": "existingVaultNone",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "No Key Vault found in the subscriptions that you can read. Choose Create a new Key Vault, or ask for Reader on the vault."
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'existing'), not(empty(basics('keyVault').vaultsApi)), empty(coalesce(basics('keyVault').vaultsApi.data, parse('[]'))))]"
+          },
+          {
+            "name": "existingVaultRbac",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "This vault uses access policies. The template gives access with Azure RBAC only. Switch the vault to Azure role-based access control (Settings > Access configuration), or choose another vault. The switch changes the access of all apps that use the vault."
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'existing'), not(empty(filter(coalesce(basics('keyVault').vaultsApi.data, parse('[]')), (v) => and(equals(v.id, basics('keyVault').existingVault), not(equals(v.rbac, 'true')))))))]"
+          },
+          {
+            "name": "existingVaultState",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "[first(map(filter(coalesce(basics('keyVault').vaultsApi.data, parse('[]')), (v) => equals(v.id, basics('keyVault').existingVault)), (v) => concat('Region of the vault: ', v.location, '. Public network access: ', v.publicAccess, '. Private endpoints: ', string(v.endpoints), '.')))]"
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'existing'), not(empty(filter(coalesce(basics('keyVault').vaultsApi.data, parse('[]')), (v) => equals(v.id, basics('keyVault').existingVault)))))]"
+          },
+          {
+            "name": "existingVaultAccess",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Access of the web app",
+            "defaultValue": "Only the two secrets of the portal",
+            "toolTip": "Scope of the role Key Vault Secrets User for id-<App name>. Only the two secrets: recommended when other apps use the vault.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Only the two secrets of the portal",
+                  "value": "Secrets"
+                },
+                {
+                  "label": "All secrets of the vault",
+                  "value": "Vault"
+                }
+              ]
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'existing')]"
+          },
+          {
+            "name": "existingVaultEndpoint",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Private endpoint",
+            "defaultValue": "Not needed: the vault has one that the App Service subnet reaches",
+            "toolTip": "The web app reads the secrets through your network. Create one only when no private endpoint of the vault is reachable from the App Service subnet.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Not needed: the vault has one that the App Service subnet reaches",
+                  "value": false
+                },
+                {
+                  "label": "Create one in the private endpoint subnet",
+                  "value": true
+                }
+              ]
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'existing')]"
+          },
+          {
+            "name": "existingVaultEndpointWarn",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "The vault already has a private endpoint. A new one writes the address of the vault into the zone privatelink.vaultcore.azure.net (section Private DNS zones). With a central zone, this changes the address for all networks that use the zone."
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'existing'), basics('keyVault').existingVaultEndpoint, not(empty(filter(filter(coalesce(basics('keyVault').vaultsApi.data, parse('[]')), (v) => equals(v.id, basics('keyVault').existingVault)), (v) => greater(v.endpoints, 0)))))]"
+          },
+          {
+            "name": "existingVaultRights",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The template adds the secrets <App name>-client-secret and <App name>-db-connection to this vault and changes nothing else. You need Key Vault Contributor (or Contributor) and Role Based Access Control Administrator on the vault."
+            },
+            "visible": "[equals(basics('keyVault').vaultMode, 'existing')]"
+          }
+        ]
+      },
+      {
+        "name": "registry",
+        "type": "Microsoft.Common.Section",
+        "label": "Container registry",
+        "visible": "[equals(basics('app').deploymentType, 'Container')]",
+        "elements": [
+          {
+            "name": "registryInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The web app runs the image <registry>/access-review-portal. Microsoft Defender for Containers or Defender CSPM scans the images in the registry."
+            }
+          },
+          {
+            "name": "registryMode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Registry",
+            "defaultValue": "Create a new registry",
+            "toolTip": "A new registry only for the portal, or your existing registry.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Create a new registry",
+                  "value": "new"
+                },
+                {
+                  "label": "Use an existing registry",
+                  "value": "existing"
+                }
+              ]
+            }
+          },
+          {
+            "name": "newRegistryInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "Premium tier (needed for private endpoints): private endpoint in the private endpoint subnet, no public access, no admin user. Trusted Microsoft services keep access, so Defender for Cloud can scan the images. The managed identity id-<App name> gets AcrPull."
+            },
+            "visible": "[equals(basics('registry').registryMode, 'new')]"
+          },
+          {
+            "name": "registryName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Registry name",
+            "placeholder": "Empty: cr<unique string>",
+            "toolTip": "5-50 letters and digits, unique in Azure. Empty: cr<unique string>.",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[a-zA-Z0-9]{5,50}$",
+              "validationMessage": "5-50 letters and digits."
+            },
+            "visible": "[equals(basics('registry').registryMode, 'new')]"
+          },
+          {
+            "name": "registriesApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "POST",
+              "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+              "body": {
+                "query": "resources | where type =~ 'microsoft.containerregistry/registries' | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' | project subscriptionId, resourceGroup = tolower(name), groupName = name) on subscriptionId, resourceGroup | project id, name, resourceGroup = coalesce(groupName, resourceGroup), subscription = coalesce(subscriptionName, subscriptionId), location, sku = tostring(sku.name), mode = tostring(properties.roleAssignmentMode), bypass = tostring(properties.networkRuleBypassOptions), publicAccess = tostring(properties.publicNetworkAccess), endpoints = coalesce(array_length(properties.privateEndpointConnections), 0) | order by name asc",
+                "options": {
+                  "$top": 1000
+                }
+              }
+            }
+          },
+          {
+            "name": "existingRegistry",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Existing registry",
+            "filter": true,
+            "toolTip": "The registries in the subscriptions that you can read: name (resource group, subscription).",
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => parse(concat('{\"label\":\"', r.name, ' (', r.resourceGroup, ', ', r.subscription, ')\",\"value\":\"', r.id, '\"}')))]"
+            },
+            "visible": "[equals(basics('registry').registryMode, 'existing')]"
+          },
+          {
+            "name": "existingRegistryNone",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "No container registry found in the subscriptions that you can read. Choose Create a new registry, or ask for Reader on the registry."
+            },
+            "visible": "[and(equals(basics('registry').registryMode, 'existing'), not(empty(basics('registry').registriesApi)), empty(coalesce(basics('registry').registriesApi.data, parse('[]'))))]"
+          },
+          {
+            "name": "existingRegistryState",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "[first(map(filter(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => equals(r.id, basics('registry').existingRegistry)), (r) => concat('Region of the registry: ', r.location, '. Tier: ', r.sku, '. Public network access: ', r.publicAccess, '. Private endpoints: ', string(r.endpoints), '.')))]"
+            },
+            "visible": "[and(equals(basics('registry').registryMode, 'existing'), not(empty(filter(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => equals(r.id, basics('registry').existingRegistry)))))]"
+          },
+          {
+            "name": "existingRegistryAbac",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "This registry uses ABAC repository permissions. id-<App name> gets Container Registry Repository Reader instead of AcrPull. The GitHub identity of the workflow needs Container Registry Repository Writer instead of AcrPush."
+            },
+            "visible": "[and(equals(basics('registry').registryMode, 'existing'), not(empty(filter(filter(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => equals(r.id, basics('registry').existingRegistry)), (r) => equals(r.mode, 'AbacRepositoryPermissions')))))]"
+          },
+          {
+            "name": "existingRegistryBypass",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "Trusted Microsoft services have no access to this registry. Defender for Cloud scans the images of a registry without public access only when trusted services may access it (Networking > Exceptions)."
+            },
+            "visible": "[and(equals(basics('registry').registryMode, 'existing'), not(empty(filter(filter(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => equals(r.id, basics('registry').existingRegistry)), (r) => and(equals(r.publicAccess, 'Disabled'), not(equals(r.bypass, 'AzureServices')))))))]"
+          },
+          {
+            "name": "existingRegistryEndpoint",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Private endpoint",
+            "defaultValue": "Not needed: the registry has one that the App Service subnet reaches",
+            "toolTip": "The web app pulls the image through your network. Create one only when no private endpoint of the registry is reachable from the App Service subnet.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Not needed: the registry has one that the App Service subnet reaches",
+                  "value": false
+                },
+                {
+                  "label": "Create one in the private endpoint subnet",
+                  "value": true
+                }
+              ]
+            },
+            "visible": "[equals(basics('registry').registryMode, 'existing')]"
+          },
+          {
+            "name": "existingRegistryPremium",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "Private endpoints need the Premium tier. Choose Not needed, or another registry."
+            },
+            "visible": "[and(equals(basics('registry').registryMode, 'existing'), basics('registry').existingRegistryEndpoint, not(empty(filter(filter(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => equals(r.id, basics('registry').existingRegistry)), (r) => not(equals(r.sku, 'Premium'))))))]"
+          },
+          {
+            "name": "existingRegistryEndpointWarn",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "The registry already has a private endpoint. A new one writes the addresses of the registry into the zone privatelink.azurecr.io (section Private DNS zones). With a central zone, this changes the addresses for all networks that use the zone."
+            },
+            "visible": "[and(equals(basics('registry').registryMode, 'existing'), basics('registry').existingRegistryEndpoint, not(empty(filter(filter(coalesce(basics('registry').registriesApi.data, parse('[]')), (r) => equals(r.id, basics('registry').existingRegistry)), (r) => greater(r.endpoints, 0)))))]"
+          },
+          {
+            "name": "existingRegistryRights",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The template gives id-<App name> the pull role on this registry and changes nothing else. You need Role Based Access Control Administrator on the registry, and Contributor for a new private endpoint."
+            },
+            "visible": "[equals(basics('registry').registryMode, 'existing')]"
+          },
+          {
+            "name": "pushInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "After the deployment, give the GitHub identity of the workflow the role AcrPush on the registry (Container Registry Repository Writer with ABAC repository permissions), and set the workflow variable ACR_LOGIN_SERVER (template output containerRegistryLoginServer)."
+            }
+          }
+        ]
+      },
+      {
         "name": "dns",
         "type": "Microsoft.Common.Section",
         "label": "Private DNS zones",
@@ -678,7 +1132,7 @@
             "type": "Microsoft.Common.OptionsGroup",
             "label": "Zones",
             "defaultValue": "Create new zones",
-            "toolTip": "New zones: the template creates privatelink.azurewebsites.net, privatelink.postgres.database.azure.com and privatelink.vaultcore.azure.net in the resource group and links them to the virtual network. Existing zones: your central zones, for example in a hub subscription.",
+            "toolTip": "New zones: the template creates the zones that its private endpoints need (privatelink.azurewebsites.net, privatelink.postgres.database.azure.com, privatelink.vaultcore.azure.net, privatelink.azurecr.io) in the resource group and links them to the virtual network. Existing zones: your central zones, for example in a hub subscription.",
             "constraints": {
               "allowedValues": [
                 {
@@ -718,7 +1172,7 @@
               "method": "POST",
               "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
               "body": {
-                "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net') | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | project id, name, resourceGroup, subscription = coalesce(subscriptionName, subscriptionId) | order by subscription asc, resourceGroup asc"
+                "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net', 'privatelink.azurecr.io') | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions/resourcegroups' | project subscriptionId, resourceGroup = tolower(name), groupName = name) on subscriptionId, resourceGroup | project id, name, resourceGroup = coalesce(groupName, resourceGroup), subscription = coalesce(subscriptionName, subscriptionId) | order by subscription asc, resourceGroup asc"
               }
             }
           },
@@ -774,7 +1228,7 @@
               "required": true,
               "allowedValues": "[map(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
             },
-            "visible": "[equals(basics('dns').dnsMode, 'existing')]"
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint))]"
           },
           {
             "name": "vaultZoneNone",
@@ -783,106 +1237,28 @@
               "style": "Warning",
               "text": "No zone privatelink.vaultcore.azure.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
             },
-            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), not(empty(basics('dns').zonesApi)), empty(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
-          }
-        ]
-      },
-      {
-        "name": "keyVault",
-        "type": "Microsoft.Common.Section",
-        "label": "Key Vault",
-        "elements": [
-          {
-            "name": "keyVaultInfo",
-            "type": "Microsoft.Common.InfoBox",
-            "options": {
-              "style": "Info",
-              "text": "The template creates a new Key Vault for the client secret and the database connection string. The web app reads them with its managed identity id-<App name>, which gets the role Key Vault Secrets User on this vault only."
-            }
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint), not(empty(basics('dns').zonesApi)), empty(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
           },
           {
-            "name": "networkAccess",
-            "type": "Microsoft.Common.OptionsGroup",
-            "label": "Network access",
-            "defaultValue": "Private endpoint only (public network access disabled)",
-            "toolTip": "The Key Vault gets a private endpoint in the private endpoint subnet (Network section) and its DNS record in the zone privatelink.vaultcore.azure.net (Private DNS zones section). Public network access is disabled, with no exceptions.",
-            "constraints": {
-              "allowedValues": [
-                {
-                  "label": "Private endpoint only (public network access disabled)",
-                  "value": "PrivateEndpoint"
-                }
-              ],
-              "required": true
-            }
-          },
-          {
-            "name": "resourceGroupMode",
-            "type": "Microsoft.Common.OptionsGroup",
-            "label": "Resource group",
-            "defaultValue": "Same resource group as the portal",
-            "toolTip": "The Key Vault, its private endpoint and the role assignment go to this resource group.",
-            "constraints": {
-              "allowedValues": [
-                {
-                  "label": "Same resource group as the portal",
-                  "value": "same"
-                },
-                {
-                  "label": "Another resource group",
-                  "value": "other"
-                }
-              ],
-              "required": true
-            }
-          },
-          {
-            "name": "resourceGroupsApi",
-            "type": "Microsoft.Solutions.ArmApiControl",
-            "request": {
-              "method": "GET",
-              "path": "[concat(subscription().id, '/resourcegroups?api-version=2021-04-01')]"
-            }
-          },
-          {
-            "name": "resourceGroup",
+            "name": "registryZone",
             "type": "Microsoft.Common.DropDown",
-            "label": "Key Vault resource group",
-            "toolTip": "An existing resource group in the subscription chosen above.",
+            "label": "Zone privatelink.azurecr.io",
+            "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
             "filter": true,
             "constraints": {
               "required": true,
-              "allowedValues": "[map(coalesce(basics('keyVault').resourceGroupsApi.value, parse('[]')), (g) => parse(concat('{\"label\":\"', g.name, '\",\"value\":\"', g.name, '\"}')))]"
+              "allowedValues": "[map(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurecr.io')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
             },
-            "visible": "[equals(basics('keyVault').resourceGroupMode, 'other')]"
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), and(equals(basics('app').deploymentType, 'Container'), or(equals(basics('registry').registryMode, 'new'), basics('registry').existingRegistryEndpoint)))]"
           },
           {
-            "name": "resourceGroupInfo",
+            "name": "registryZoneNone",
             "type": "Microsoft.Common.InfoBox",
             "options": {
-              "style": "Info",
-              "text": "You need Contributor and Role Based Access Control Administrator on this resource group too."
+              "style": "Warning",
+              "text": "No zone privatelink.azurecr.io found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
             },
-            "visible": "[equals(basics('keyVault').resourceGroupMode, 'other')]"
-          },
-          {
-            "name": "keyVaultName",
-            "type": "Microsoft.Common.TextBox",
-            "label": "Key Vault name",
-            "placeholder": "Empty: a name derived from the resource group and the app name",
-            "toolTip": "3-24 characters, unique in Azure. Empty: kv-<unique string>.",
-            "constraints": {
-              "required": false,
-              "regex": "^$|^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$",
-              "validationMessage": "3-24 characters: letters, digits and hyphens. Starts with a letter."
-            }
-          },
-          {
-            "name": "enablePurgeProtection",
-            "type": "Microsoft.Common.CheckBox",
-            "label": "Purge protection",
-            "toolTip": "With purge protection, a deleted vault and its name stay reserved for 90 days. Recommended for production.",
-            "defaultValue": true
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), and(equals(basics('app').deploymentType, 'Container'), or(equals(basics('registry').registryMode, 'new'), basics('registry').existingRegistryEndpoint)), not(empty(basics('dns').zonesApi)), empty(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurecr.io'))))]"
           }
         ]
       }
@@ -898,7 +1274,7 @@
       "privateEndpointSubnetResourceId": "[basics('network').endpointSubnet]",
       "webAppPrivateDnsZoneResourceId": "[if(equals(basics('dns').dnsMode, 'existing'), basics('dns').siteZone, '')]",
       "postgresPrivateDnsZoneResourceId": "[if(and(equals(basics('dns').dnsMode, 'existing'), equals(basics('database').databaseServer, 'AzurePostgreSQL')), basics('dns').postgresZone, '')]",
-      "keyVaultPrivateDnsZoneResourceId": "[if(equals(basics('dns').dnsMode, 'existing'), basics('dns').vaultZone, '')]",
+      "keyVaultPrivateDnsZoneResourceId": "[if(and(equals(basics('dns').dnsMode, 'existing'), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint)), basics('dns').vaultZone, '')]",
       "databaseServer": "[basics('database').databaseServer]",
       "databaseAuthentication": "[if(equals(basics('database').databaseServer, 'AzurePostgreSQL'), basics('database').databaseAuthentication, 'ManagedIdentity')]",
       "postgresAdminPassword": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').databaseAuthentication, 'Password')), basics('database').postgresAdminPassword, '')]",
@@ -908,13 +1284,22 @@
       "postgresVersion": "[basics('database').postgresVersion]",
       "existingServerConnectionString": "[if(equals(basics('database').databaseServer, 'ExistingServer'), basics('database').existingServerConnectionString, '')]",
       "existingServerCaCertificate": "[if(equals(basics('database').databaseServer, 'ExistingServer'), coalesce(basics('database').existingServerCaCertificate, ''), '')]",
-      "keyVaultName": "[coalesce(basics('keyVault').keyVaultName, '')]",
+      "keyVaultName": "[if(equals(basics('keyVault').vaultMode, 'new'), coalesce(basics('keyVault').keyVaultName, ''), '')]",
       "enablePurgeProtection": "[basics('keyVault').enablePurgeProtection]",
-      "keyVaultResourceGroup": "[if(equals(basics('keyVault').resourceGroupMode, 'other'), basics('keyVault').resourceGroup, '')]",
-      "appServiceZoneRedundant": "[basics('app').zoneRedundant]",
+      "keyVaultResourceGroup": "[if(and(equals(basics('keyVault').vaultMode, 'new'), equals(basics('keyVault').resourceGroupMode, 'other')), basics('keyVault').resourceGroup, '')]",
+      "appServiceZoneRedundant": "[greater(basics('app').zoneRedundant, 1)]",
       "postgresHighAvailability": "[if(equals(basics('database').databaseServer, 'AzurePostgreSQL'), basics('database').highAvailability, 'Disabled')]",
       "postgresAvailabilityZone": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(equals(basics('database').availabilityZone, 'none'))), basics('database').availabilityZone, '')]",
-      "postgresStandbyAvailabilityZone": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').highAvailability, 'ZoneRedundant'), not(equals(basics('database').standbyZone, 'none'))), basics('database').standbyZone, '')]"
+      "postgresStandbyAvailabilityZone": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').highAvailability, 'ZoneRedundant'), not(equals(basics('database').standbyZone, 'none'))), basics('database').standbyZone, '')]",
+      "appServiceInstanceCount": "[basics('app').zoneRedundant]",
+      "deploymentType": "[basics('app').deploymentType]",
+      "existingKeyVaultResourceId": "[if(equals(basics('keyVault').vaultMode, 'existing'), basics('keyVault').existingVault, '')]",
+      "existingKeyVaultAccess": "[basics('keyVault').existingVaultAccess]",
+      "existingKeyVaultPrivateEndpoint": "[and(equals(basics('keyVault').vaultMode, 'existing'), basics('keyVault').existingVaultEndpoint)]",
+      "existingContainerRegistryResourceId": "[if(and(equals(basics('app').deploymentType, 'Container'), equals(basics('registry').registryMode, 'existing')), basics('registry').existingRegistry, '')]",
+      "existingContainerRegistryPrivateEndpoint": "[and(equals(basics('app').deploymentType, 'Container'), equals(basics('registry').registryMode, 'existing'), basics('registry').existingRegistryEndpoint)]",
+      "containerRegistryName": "[if(and(equals(basics('app').deploymentType, 'Container'), equals(basics('registry').registryMode, 'new')), coalesce(basics('registry').registryName, ''), '')]",
+      "containerRegistryPrivateDnsZoneResourceId": "[if(and(equals(basics('dns').dnsMode, 'existing'), and(equals(basics('app').deploymentType, 'Container'), or(equals(basics('registry').registryMode, 'new'), basics('registry').existingRegistryEndpoint))), basics('dns').registryZone, '')]"
     }
   }
 }

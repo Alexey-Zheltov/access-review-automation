@@ -8,7 +8,8 @@ ARG RUNTIME_TAG=10.0
 
 FROM mcr.microsoft.com/dotnet/sdk:${SDK_TAG} AS build
 WORKDIR /src
-COPY dotnet-tools.json ./
+# Directory.Build.props: NuGet audit, the restore stops on packages with known high or critical vulnerabilities.
+COPY dotnet-tools.json Directory.Build.props ./
 COPY src/AccessReviewPortal/AccessReviewPortal.csproj src/AccessReviewPortal/
 RUN dotnet tool restore && dotnet restore src/AccessReviewPortal/AccessReviewPortal.csproj
 COPY src/ src/

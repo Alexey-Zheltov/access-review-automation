@@ -22,7 +22,7 @@ Contents
 ## 1. What you deploy
 
 ```
- Reviewer's browser ──HTTPS──> Azure App Service (Linux, .NET 10, one instance; two with zone redundancy)
+ Reviewer's browser ──HTTPS──> Azure App Service (Linux, .NET 10, one instance; two or three with zone redundancy)
                                   │  sign-in: Microsoft Entra ID
                                   ├──> Microsoft Graph, Azure Resource Manager, Azure Resource Graph
                                   │      scanner: read-only application permissions of the app registration
@@ -244,18 +244,20 @@ Use this option when the portal must be reachable only from your network. The te
 | | What the template creates |
 |---|---|
 | Web app | Private endpoint, public network access disabled. VNet integration: all outbound traffic goes through your network. |
+| Code of the portal | **Code** (`deploymentType=Code`, default): the workflow `deploy-appservice.yml` uploads the built app to the built-in .NET 10 runtime. **Container** (`deploymentType=Container`): the web app runs the image `<registry>/access-review-portal` from Azure Container Registry and pulls it through your network with its managed identity. A new registry (Premium, private endpoint, no public access, no admin user; trusted Microsoft services keep access, so Microsoft Defender for Cloud can scan the images), or your existing registry (`existingContainerRegistryResourceId`): the identity gets AcrPull, or Container Registry Repository Reader when the registry uses ABAC repository permissions. The workflow `deploy-appservice-container.yml` builds and pushes the image ([Container image](#container-image-option-d)). |
 | PostgreSQL | Azure Database for PostgreSQL Flexible Server with a private endpoint, public network access disabled. Or your own server (option C). |
-| Key Vault | A new Key Vault with a private endpoint, public network access disabled. It keeps the client secret and the connection string. In the resource group of the deployment, or in another existing resource group of the same subscription (`keyVaultResourceGroup`; in the portal form: section **Key Vault**). |
-| Subnets (existing) | **App Service subnet**: only for App Service and delegated to `Microsoft.Web/serverFarms` before the deployment (the template does not change your subnets), `/28` or larger, `/26` recommended. **Private endpoint subnet**: the three private endpoints. Both in the region of the deployment. |
-| Private DNS zones | `privatelink.azurewebsites.net`, `privatelink.postgres.database.azure.com`, `privatelink.vaultcore.azure.net`: your existing zones, or new zones in the resource group, linked to the virtual network of the App Service subnet. |
-| Zone redundancy (optional) | App Service plan with two instances in different availability zones (`appServiceZoneRedundant=true`, Premium plan). Azure chooses the zones of the instances; App Service has no setting for them. PostgreSQL high availability with a standby server (`postgresHighAvailability=ZoneRedundant` or `SameZone`, not with Burstable sizes; the standby doubles the compute cost). The region must have availability zones. |
+| Key Vault | A new Key Vault with a private endpoint, public network access disabled. It keeps the client secret and the connection string. In the resource group of the deployment, or in another existing resource group of the same subscription (`keyVaultResourceGroup`; in the portal form: section **Key Vault**). Or your existing vault that uses Azure RBAC (`existingKeyVaultResourceId`, any subscription of the tenant): the template adds the secrets `<app-name>-client-secret` and `<app-name>-db-connection` and gives the managed identity the role Key Vault Secrets User on these two secrets only (`existingKeyVaultAccess=Secrets`, default) or on the whole vault (`Vault`). It changes nothing else in the vault. |
+| Subnets (existing) | **App Service subnet**: only for App Service and delegated to `Microsoft.Web/serverFarms` before the deployment (the template does not change your subnets), `/28` or larger, `/26` recommended. **Private endpoint subnet**: the private endpoints of the web app, PostgreSQL, Key Vault and, for a container, the registry. Both in the region of the deployment. |
+| Private DNS zones | `privatelink.azurewebsites.net`, `privatelink.postgres.database.azure.com`, `privatelink.vaultcore.azure.net` and, for a container, `privatelink.azurecr.io`: your existing zones, or new zones in the resource group, linked to the virtual network of the App Service subnet. A zone is needed only for a private endpoint that the template creates: an existing vault or registry gets one only on request (`existingKeyVaultPrivateEndpoint=true`, `existingContainerRegistryPrivateEndpoint=true`). |
+| Zone redundancy (optional) | App Service plan with two or three instances (`appServiceZoneRedundant=true`, `appServiceInstanceCount=2` or `3`, Premium plan). Azure spreads the instances over the availability zones of the region: with three instances in a region with three zones, one instance runs in each zone. Azure chooses the zones; App Service has no setting to pin an instance to a zone. PostgreSQL high availability with a standby server (`postgresHighAvailability=ZoneRedundant` or `SameZone`, not with Burstable sizes; the standby doubles the compute cost). The region must have availability zones. |
 | PostgreSQL zones (optional) | The zone of the server (`postgresAvailabilityZone`: 1, 2 or 3) and, with `ZoneRedundant`, the zone of the standby (`postgresStandbyAvailabilityZone`, another zone). Empty = Azure chooses. Azure uses the zones only when it creates the server. A later deployment with other zones does not move the server or the standby. |
 
 Checks before the deployment:
 
 - The portal form lists only the virtual networks of the chosen region, subnets delegated to `Microsoft.Web/serverFarms` for App Service, and subnets without delegation for the private endpoints.
 - In the section **Database** it reads the PostgreSQL offer of the region and your vCore quota, and shows the free quota. A red message tells you when the size is not offered, the quota of the size family or the total quota is too small (a standby counts double), the region is restricted for your subscription, high availability does not fit the size or the region, or the standby zone is the zone of the server. Choose other values before you create the deployment.
-- The template itself stops before it creates anything when a subnet value is not a subnet resource id, zone redundancy is chosen with a Basic plan, high availability with a Burstable size, or a standby zone without zone-redundant high availability or in the zone of the server. Azure checks the App Service quota at **Review + create**.
+- In the sections **Key Vault** and **Container registry** it lists the vaults and registries of the subscriptions that you can read. A red message tells you when a vault uses access policies instead of Azure RBAC. A note tells you when a registry uses ABAC repository permissions, when trusted Microsoft services have no access to a registry without public access (then Defender for Cloud cannot scan the images), and when a new private endpoint would change the record of a vault or registry that already has one.
+- The template itself stops before it creates anything when a subnet value is not a subnet resource id, zone redundancy is chosen with a Basic plan, high availability with a Burstable size, a standby zone without zone-redundant high availability or in the zone of the server, or the resource id of an existing vault or registry has the wrong form. Azure checks the App Service quota at **Review + create**. Zone redundancy needs its own quota for the size in the region, for example "P0v3 AZ App Service instances". If it is too small, the deployment stops with `InternalSubscriptionIsOverQuotaForSku`.
 - Some limits are known only when Azure creates the server (`SkuNotAvailable`). The template therefore creates PostgreSQL first: with such a size the deployment stops after about two minutes and creates nothing else but the managed identity.
 
 The PostgreSQL server gets the name from `postgresServerName` (portal form: **Server name**; empty = `psql-<app-name>`). The deployment step that creates it is named `postgres-<server name>`, the step of the Key Vault `keyvault-<vault name>`.
@@ -273,7 +275,7 @@ Agree with your network team before you deploy:
 https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.createUiDefinition.json
 ```
 
-The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`. The portal asks "Do you trust the authors code?": select **Yes, I trust the authors**. The form then reads your virtual networks, subnets and private DNS zones with your rights (read only) and lists them. The form is one page with the sections **Network**, **Web app**, **Database**, **Private DNS zones** and **Key Vault**.
+The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`. The portal asks "Do you trust the authors code?": select **Yes, I trust the authors**. The form then reads your virtual networks, subnets, private DNS zones, vaults and registries with your rights (read only) and lists them. The form is one page with the sections **Network**, **Web app**, **Database**, **Key Vault**, **Container registry** (only for a container) and **Private DNS zones**.
 
 **Commands.** Find the resource ids of the subnets:
 
@@ -293,9 +295,11 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
                  clientId=$clientId clientSecret=$clientSecret
 ```
 
-- Existing zones: add `webAppPrivateDnsZoneResourceId=<id> postgresPrivateDnsZoneResourceId=<id> keyVaultPrivateDnsZoneResourceId=<id>`.
+- Existing zones: add `webAppPrivateDnsZoneResourceId=<id> postgresPrivateDnsZoneResourceId=<id> keyVaultPrivateDnsZoneResourceId=<id>` (and `containerRegistryPrivateDnsZoneResourceId=<id>` for a container).
 - Key Vault in another resource group: add `keyVaultResourceGroup=<resource group>`. You need Contributor and Role Based Access Control Administrator there too.
-- Zone redundancy: add `appServiceZoneRedundant=true` and `postgresHighAvailability=ZoneRedundant` (with a General Purpose size). To choose the PostgreSQL zones, add for example `postgresAvailabilityZone=1 postgresStandbyAvailabilityZone=2`.
+- Your existing Key Vault: add `existingKeyVaultResourceId=<resource id of the vault>`. The vault must use Azure RBAC (`az keyvault show --name <vault> --query properties.enableRbacAuthorization` returns `true`). Add `existingKeyVaultAccess=Vault` to give access to all secrets of the vault, and `existingKeyVaultPrivateEndpoint=true` when the App Service subnet does not reach a private endpoint of the vault yet. You need Key Vault Contributor (or Contributor) and Role Based Access Control Administrator on the vault.
+- Container image: add `deploymentType=Container`. For your existing registry add `existingContainerRegistryResourceId=<resource id of the registry>` (and `existingContainerRegistryPrivateEndpoint=true` when the App Service subnet does not reach a private endpoint of the registry yet); for a new registry you can add `containerRegistryName=<name>`. Then see [Container image](#container-image-option-d).
+- Zone redundancy: add `appServiceZoneRedundant=true appServiceInstanceCount=3` and `postgresHighAvailability=ZoneRedundant` (with a General Purpose size). To choose the PostgreSQL zones, add for example `postgresAvailabilityZone=1 postgresStandbyAvailabilityZone=2`.
 - `SkuNotAvailable` for PostgreSQL: this size is not available for your subscription in this region. Option D uses General Purpose `Standard_D2ds_v5` by default; Burstable sizes (`postgresSkuName=Standard_B2s`) are cheaper but not available everywhere. Choose another `postgresSkuName` and deploy again with the same values. The tier follows from the size.
 - Your own PostgreSQL server: add `databaseServer=ExistingServer existingServerConnectionString=$dbConnection` (option C).
 - The deployment stops before it creates anything if a subnet value is not a subnet resource id.
@@ -343,6 +347,23 @@ The folder `artifacts` is in `.gitignore`. The upload takes about one minute. `-
 
 At the first start the portal creates the database schema (setting `Database__ApplyMigrationsOnStartup=true`). The first start takes one to two minutes.
 
+### Container image (option D)
+
+With `deploymentType=Container` the web app runs the image from the registry instead of the package above. Until the first image is in the registry, the web app answers 503. Build and push the image on a computer or runner in your network with Docker and Azure CLI. It must resolve `<registry>.azurecr.io` and `<registry>.<region>.data.azurecr.io` to the private endpoint of the registry. Your account needs AcrPush on the registry (Container Registry Repository Writer when the registry uses ABAC repository permissions).
+
+```powershell
+$loginServer = az deployment group show --resource-group $resourceGroup --name accessreview `
+    --query properties.outputs.containerRegistryLoginServer.value -o tsv
+az acr login --name $loginServer.Split('.')[0]
+docker build --target runtime -t "$loginServer/access-review-portal:latest" .
+docker push "$loginServer/access-review-portal:latest"
+az webapp restart --resource-group $resourceGroup --name $appName
+```
+
+- The template sets the image tag `latest`. A new run of the template switches the web app back to `latest`, so push `latest` with every build. The workflow `deploy-appservice-container.yml` pushes the tags `<commit>` and `latest` and switches the web app to `<commit>` ([Deploy with GitHub Actions](#deploy-with-github-actions-optional)).
+- The web app pulls the image with its managed identity `id-<app-name>` through the VNet integration. No registry password is stored.
+- Microsoft Defender for Cloud scans the images in the registry when the subscription of the registry has the plan **Defender for Containers** or **Defender CSPM** with agentless container vulnerability assessment. The findings are in **Defender for Cloud > Recommendations**: "Azure registry container images should have vulnerabilities resolved". A registry without public access must allow trusted Microsoft services; the template sets this for a new registry.
+
 ## Step 6. Check the installation
 
 Wait until the portal answers `ok`:
@@ -385,6 +406,8 @@ The roles a reviewer needs to **apply** approved removals are in [INSTALL-GUIDE.
 
 The workflow `.github/workflows/deploy-appservice.yml` builds, tests and deploys the portal to the web app. It signs in to Azure with OpenID Connect (OIDC) and a user-assigned managed identity. No secret is stored in GitHub. Do steps 1 to 4 first. The workflow deploys only the code.
 
+For option D with a container image (`deploymentType=Container`), use `.github/workflows/deploy-appservice-container.yml` instead. It builds the image on the runner, pushes it to the registry and switches the web app to it. In addition to the steps below it needs the role AcrPush on the registry, the variable `ACR_LOGIN_SERVER` and a runner with Docker.
+
 You need **Admin** on the GitHub repository. The Azure rights are in [PERMISSIONS.md, section 8](PERMISSIONS.md#8-pipelines-optional).
 
 ### Managed identity and federated credential
@@ -410,6 +433,15 @@ az role assignment create --assignee-object-id $identity.principalId --assignee-
 $identity.clientId
 ```
 
+Container image: the identity also pushes to the registry. With ABAC repository permissions use the role `Container Registry Repository Writer` instead of `AcrPush`.
+
+```powershell
+$registryId = az deployment group show --resource-group $resourceGroup --name accessreview `
+    --query properties.outputs.containerRegistryId.value -o tsv
+az role assignment create --assignee-object-id $identity.principalId --assignee-principal-type ServicePrincipal `
+    --role AcrPush --scope $registryId --output none
+```
+
 The template turns off basic authentication (FTP and SCM). The workflow does not need it: `az webapp deploy` uses the Microsoft Entra token of the identity.
 
 ### GitHub environment and variables
@@ -425,6 +457,7 @@ The template turns off basic authentication (FTP and SCM). The workflow does not
 | `AZURE_SUBSCRIPTION_ID` | `$subscriptionId` |
 | `AZURE_RESOURCE_GROUP` | `$resourceGroup` |
 | `APPSERVICE_NAME` | `$appName` |
+| `ACR_LOGIN_SERVER` | container image only: the template output `containerRegistryLoginServer`, for example `crcontoso.azurecr.io` |
 
 ### Runner
 
@@ -447,6 +480,8 @@ unset RUNNER_TOKEN
 `-e RUNNER_TOKEN` without a value passes the variable to the container, so the token is not in the command line or in the shell history.
 This workflow does not use Docker, so the runner does not need the Docker socket. The runner needs outbound HTTPS to GitHub (see GITHUB-RUNNER-SETUP.md), `builds.dotnet.microsoft.com`, `api.nuget.org`, `login.microsoftonline.com`, `management.azure.com`, `<app-name>.scm.azurewebsites.net` and `<app-name>.azurewebsites.net` (health check).
 
+The container workflow `deploy-appservice-container.yml` builds the image with the Docker engine of the host: start the runner with the Docker socket (`-v /var/run/docker.sock:/var/run/docker.sock`, see GITHUB-RUNNER-SETUP.md). It needs `mcr.microsoft.com` and `*.data.mcr.microsoft.com` for the base images, and the private endpoint of the registry, instead of the SCM address of the web app.
+
 To use a GitHub-hosted runner instead, add the **repository** variable `RUNNER_LABELS` with the value `["ubuntu-latest"]` (**Settings > Secrets and variables > Actions > Variables**). The web app must then accept deployments from the internet, which is the case in both options of the template.
 
 ### Run the workflow
@@ -458,7 +493,14 @@ gh workflow run deploy-appservice.yml --repo <owner>/<repo> --ref main
 gh run watch --repo <owner>/<repo>
 ```
 
-The first run takes about five minutes. The step **Health check** ends with "The portal answers". To deploy every push to `main`, add the `push` trigger at the top of the workflow file (see the comment there).
+The first run takes about five minutes. The step **Health check** ends with "The portal answers". To deploy every push to `main`, add the `push` trigger at the top of the workflow file (see the comment there). Container image: run `deploy-appservice-container.yml` the same way.
+
+## Vulnerability checks
+
+- **Packages.** Every build (local, CI, both workflows and `docker build`) runs the NuGet audit of the .NET SDK. `Directory.Build.props` turns known vulnerabilities of high and critical severity into errors (NU1903, NU1904), also for transitive packages: the build stops and names the package and the advisory. Update the package, or add a direct reference with the fixed version for a transitive one. Low and moderate vulnerabilities stay warnings. The audit reads the vulnerability data of the package source (nuget.org); warning NU1900 means that it could not read them, so the check did not run.
+- **Container image.** Microsoft Defender for Containers or Defender CSPM scans the image in Azure Container Registry: the packages of the operating system and the .NET packages ([Container image](#container-image-option-d)).
+- **Code package.** App Service updates the operating system and the .NET runtime of the web app. The packages of the portal are checked by the build.
+- Optional: Dependabot alerts in GitHub, and the GitHub connector of Defender for Cloud (DevOps security), also report vulnerable packages of the repository.
 
 ## Update, client secret, removal
 
@@ -507,6 +549,10 @@ If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role
 | Problem | Check |
 |---|---|
 | Deployment: `SkuNotAvailable` | The PostgreSQL size is not available for your subscription in this region. Choose another region or size (`postgresSkuName`, `postgresSkuTier`). |
+| Deployment: `InternalSubscriptionIsOverQuotaForSku`, "Current Limit (P0v3 AZ App Service instances)" | Zone redundancy needs its own quota for the plan size in the region. Ask for more quota (**Help + support**, link in the message), or choose fewer instances or no zone redundancy. |
+| Build: `error NU1903` or `NU1904` ("has a known high/critical severity vulnerability") | A package has a known vulnerability ([Vulnerability checks](#vulnerability-checks)). Update the package, or add a direct reference with the fixed version for a transitive package. |
+| Container image: the web app answers 503 | No image yet: run the container workflow or push the image ([Container image](#container-image-option-d)). Read the container log through Azure Resource Manager (the Kudu site has no public access): `az rest --method post --url "https://management.azure.com$siteId/containerlogs?api-version=2024-04-01"`. `unauthorized` or `insufficient_scope`: the identity `id-<app-name>` has no pull role; with ABAC repository permissions it needs Container Registry Repository Reader. A name or timeout error: the App Service subnet does not reach the private endpoint of the registry, or `privatelink.azurecr.io` has no records for the registry and its data endpoint. |
+| GitHub Actions: `unauthorized` or `insufficient_scope` in **Push the image** | The managed identity of the workflow has no AcrPush on the registry (Container Registry Repository Writer with ABAC repository permissions), or the role is new: wait some minutes and run the workflow again. |
 | Deployment: `AvailabilityZoneNotAvailable` | The PostgreSQL size is not offered in this zone of the region. Choose another zone, or leave the zones empty: then Azure chooses. |
 | Azure portal: after **Review + create** the form keeps loading and **Create** stays grey | This happens in a form with more than one tab, for example your own copy of the form. When a form reads data from Azure, the Azure portal waits without end if you did not open every tab. Close the form, open it again, and open every tab before **Review + create**. The form of option D is one page. |
 | Deployment: `Conflict` on the App Service plan, "No available instances to satisfy this request. App Service is attempting to increase capacity." | The region has no free capacity for this plan size at the moment. Run the deployment again some minutes later (the template is idempotent), or choose another plan size or region. |
@@ -517,7 +563,7 @@ If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role
 | Your own server: `no pg_hba.conf entry for host` or `password authentication failed` | Add the `hostssl` line for the app subnet to `pg_hba.conf` and reload PostgreSQL. Check the login and password in the connection string (Key Vault secret `portal-db-connection` or app setting `ConnectionStrings__DefaultConnection`). |
 | Your own server: "The remote certificate was rejected" or a name mismatch | The CA of the server certificate is missing (`existingServerCaCertificate`, app setting `Database__RootCertificate`), or `Host` in the connection string is not a name or IP address in the certificate. |
 | Managed identity: `role "id-<app-name>" does not exist` or a token error | The identity is not a Microsoft Entra administrator of the server, or `Database__ManagedIdentityClientId` is not the client ID of `id-<app-name>`. Check **Security > Authentication** of the server and run the template again. |
-| Private network: Key Vault reference status `AccessToKeyVaultDenied` | The web app cannot read Key Vault: no role, no network path, or the role is not active yet. Check the role `Key Vault Secrets User` of the identity `id-<app-name>` on the vault, and the private endpoint `pe-<vault name>`. Then restart the web app: `az webapp restart --resource-group $resourceGroup --name $appName`. If you changed the template to use a vault with public access, check that no policy set public network access to **Disabled** ([PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy)). |
+| Private network: Key Vault reference status `AccessToKeyVaultDenied` | The web app cannot read Key Vault: no role, no network path, or the role is not active yet. Check the role `Key Vault Secrets User` of the identity `id-<app-name>` on the vault (an existing vault of option D: on the secrets `<app-name>-client-secret` and `<app-name>-db-connection`, and the vault must use Azure RBAC), and the private endpoint of the vault. Then restart the web app: `az webapp restart --resource-group $resourceGroup --name $appName`. If you changed the template to use a vault with public access, check that no policy set public network access to **Disabled** ([PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy)). |
 | Option D: `Subnet ... is missing a delegation to Microsoft.Web/serverFarms` | The App Service subnet is not delegated. Delegate it (command in [option D](#option-d-your-existing-network-private-endpoints-only)) and run the deployment again. |
 | Option D: the browser shows `403 - Forbidden` or `Ip Forbidden`, or `az webapp deploy` fails with 403 | The request came from the internet: the web app has no public access. Use a computer in your network. `nslookup <app-name>.azurewebsites.net` must return the private IP address of the private endpoint `pe-<app-name>`. |
 | Option D: deployment error "A virtual network cannot be linked to multiple zones with overlapping namespaces" | The virtual network is already linked to a zone with this name, for example a central `privatelink.*` zone. Choose **Use existing zones** in the portal form, or give the zone resource ids. |

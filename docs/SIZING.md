@@ -108,7 +108,7 @@ Burstable servers work with CPU credits. A long scan or many exports can use up 
 
 ## 5. App Service plan
 
-The portal runs as **one instance**, or two with zone redundancy ([DEPLOY-AZURE-APP-SERVICE.md, option D](DEPLOY-AZURE-APP-SERVICE.md#option-d-your-existing-network-private-endpoints-only)): sessions stay on one instance (ARR affinity), and a PostgreSQL lock lets only one instance run a scheduled scan. The size of the plan matters for two things:
+The portal runs as **one instance**, or two or three with zone redundancy ([DEPLOY-AZURE-APP-SERVICE.md, option D](DEPLOY-AZURE-APP-SERVICE.md#option-d-your-existing-network-private-endpoints-only)): sessions stay on one instance (ARR affinity), and a PostgreSQL lock lets only one instance run a scheduled scan. The size of the plan matters for two things:
 
 - **Excel export and the quarterly campaign report.** The export builds the whole workbook in memory. Measured:
 

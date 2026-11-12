@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "11075617820643091079"
+      "templateHash": "3462600150318603436"
     }
   },
   "parameters": {
@@ -46,7 +46,27 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Zone redundancy of the App Service plan: two instances in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance."
+        "description": "Zone redundancy of the App Service plan: the instances run in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance."
+      }
+    },
+    "appServiceInstanceCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 10,
+      "metadata": {
+        "description": "Instances of the App Service plan. With zone redundancy at least 2: Azure spreads them over the availability zones of the region, so 3 instances in a region with three zones run one in each zone."
+      }
+    },
+    "deploymentType": {
+      "type": "string",
+      "defaultValue": "Code",
+      "allowedValues": [
+        "Code",
+        "Container"
+      ],
+      "metadata": {
+        "description": "Code: the workflow deploy-appservice.yml uploads the built app to the built-in .NET 10 runtime. Container: the web app runs the image from Azure Container Registry; the workflow deploy-appservice-container.yml builds and pushes it."
       }
     },
     "tenantId": {
@@ -98,7 +118,14 @@
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Existing private DNS zone privatelink.vaultcore.azure.net. Empty = create one in this resource group and link it to the VNet of the app subnet."
+        "description": "Existing private DNS zone privatelink.vaultcore.azure.net. Empty = create one in this resource group and link it to the VNet of the app subnet. Not needed for an existing vault without a new private endpoint."
+      }
+    },
+    "containerRegistryPrivateDnsZoneResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container: existing private DNS zone privatelink.azurecr.io. Empty = create one in this resource group and link it to the VNet of the app subnet. Not needed for an existing registry without a new private endpoint."
       }
     },
     "databaseServer": {
@@ -250,6 +277,60 @@
         "description": "Purge protection of the Key Vault. With it, a deleted vault name stays reserved until the retention period ends."
       }
     },
+    "existingKeyVaultResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource id of an existing Key Vault that uses Azure RBAC (permission model \"Azure role-based access control\"), in any subscription of the tenant. The template adds the secrets <appName>-client-secret and <appName>-db-connection and gives id-<appName> the role Key Vault Secrets User. It changes nothing else in the vault. Empty = the template creates a new vault (keyVaultName, keyVaultResourceGroup, enablePurgeProtection)."
+      }
+    },
+    "existingKeyVaultAccess": {
+      "type": "string",
+      "defaultValue": "Secrets",
+      "allowedValues": [
+        "Secrets",
+        "Vault"
+      ],
+      "metadata": {
+        "description": "Existing Key Vault: scope of the role Key Vault Secrets User for id-<appName>. Secrets = only the two secrets of the portal (for a vault that other apps also use). Vault = all secrets of the vault."
+      }
+    },
+    "existingKeyVaultPrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Existing Key Vault: create a private endpoint for the vault in the private endpoint subnet, with its record in the zone privatelink.vaultcore.azure.net. false = the vault already has a private endpoint that the App Service subnet reaches, for example in a hub network with central DNS zones."
+      }
+    },
+    "existingContainerRegistryResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container: resource id of an existing Azure Container Registry, in any subscription of the tenant. id-<appName> gets the pull role: AcrPull, or Container Registry Repository Reader for a registry with ABAC repository permissions. Empty = the template creates a new registry (Premium, private endpoint, no public access, no admin user)."
+      }
+    },
+    "existingContainerRegistryPrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Container with an existing registry: create a private endpoint for the registry in the private endpoint subnet, with its records in the zone privatelink.azurecr.io. false = the registry already has a private endpoint that the App Service subnet reaches."
+      }
+    },
+    "containerRegistryName": {
+      "type": "string",
+      "defaultValue": "",
+      "maxLength": 50,
+      "metadata": {
+        "description": "Container with a new registry: registry name (5-50 letters and digits, globally unique). Empty = cr<unique string>."
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "defaultValue": "access-review-portal:latest",
+      "metadata": {
+        "description": "Container: repository and tag of the portal image in the registry. The workflow deploy-appservice-container.yml pushes the tags <commit> and latest, and switches the web app to <commit>."
+      }
+    },
     "tags": {
       "type": "object",
       "defaultValue": {
@@ -265,21 +346,37 @@
     "identityName": "[format('id-{0}', parameters('appName'))]",
     "postgresSkuTier": "[if(startsWith(parameters('postgresSkuName'), 'Standard_B'), 'Burstable', if(startsWith(parameters('postgresSkuName'), 'Standard_E'), 'MemoryOptimized', 'GeneralPurpose'))]",
     "serverName": "[if(empty(parameters('postgresServerName')), format('psql-{0}', parameters('appName')), parameters('postgresServerName'))]",
-    "vaultName": "[if(empty(parameters('keyVaultName')), format('kv-{0}', uniqueString(resourceGroup().id, parameters('appName'))), parameters('keyVaultName'))]",
-    "vaultResourceGroup": "[if(empty(parameters('keyVaultResourceGroup')), resourceGroup().name, parameters('keyVaultResourceGroup'))]",
+    "useExistingVault": "[not(empty(parameters('existingKeyVaultResourceId')))]",
+    "existingVaultIdParts": "[split(parameters('existingKeyVaultResourceId'), '/')]",
+    "vaultSubscriptionId": "[if(variables('useExistingVault'), variables('existingVaultIdParts')[2], subscription().subscriptionId)]",
+    "vaultResourceGroup": "[if(variables('useExistingVault'), variables('existingVaultIdParts')[4], if(empty(parameters('keyVaultResourceGroup')), resourceGroup().name, parameters('keyVaultResourceGroup')))]",
+    "vaultName": "[if(variables('useExistingVault'), last(variables('existingVaultIdParts')), if(empty(parameters('keyVaultName')), format('kv-{0}', uniqueString(resourceGroup().id, parameters('appName'))), parameters('keyVaultName')))]",
+    "clientSecretName": "[if(variables('useExistingVault'), format('{0}-client-secret', parameters('appName')), 'portal-client-secret')]",
+    "connectionSecretName": "[if(variables('useExistingVault'), format('{0}-db-connection', parameters('appName')), 'portal-db-connection')]",
+    "vaultEndpointNeeded": "[or(not(variables('useExistingVault')), parameters('existingKeyVaultPrivateEndpoint'))]",
+    "useContainer": "[equals(parameters('deploymentType'), 'Container')]",
+    "useExistingRegistry": "[and(variables('useContainer'), not(empty(parameters('existingContainerRegistryResourceId'))))]",
+    "existingRegistryIdParts": "[split(parameters('existingContainerRegistryResourceId'), '/')]",
+    "registrySubscriptionId": "[if(variables('useExistingRegistry'), variables('existingRegistryIdParts')[2], subscription().subscriptionId)]",
+    "registryResourceGroup": "[if(variables('useExistingRegistry'), variables('existingRegistryIdParts')[4], resourceGroup().name)]",
+    "registryName": "[if(variables('useExistingRegistry'), last(variables('existingRegistryIdParts')), if(empty(parameters('containerRegistryName')), format('cr{0}', uniqueString(resourceGroup().id, parameters('appName'))), parameters('containerRegistryName')))]",
+    "registryLoginServer": "[format('{0}{1}', toLower(variables('registryName')), environment().suffixes.acrLoginServer)]",
+    "registryEndpointNeeded": "[and(variables('useContainer'), or(not(variables('useExistingRegistry')), parameters('existingContainerRegistryPrivateEndpoint')))]",
     "subnetIdPart": "/providers/microsoft.network/virtualnetworks/",
     "badSubnetParameters": "[concat(if(and(contains(toLower(parameters('appSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('appSubnetResourceId')), '/subnets/')), createArray(), createArray('appSubnetResourceId')), if(and(contains(toLower(parameters('privateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('privateEndpointSubnetResourceId')), '/subnets/')), createArray(), createArray('privateEndpointSubnetResourceId')))]",
     "appSubnetId": "[if(empty(variables('badSubnetParameters')), parameters('appSubnetResourceId'), fail(format('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: {0}', join(variables('badSubnetParameters'), ', '))))]",
     "endpointSubnetId": "[parameters('privateEndpointSubnetResourceId')]",
-    "badOptions": "[concat(if(and(parameters('appServiceZoneRedundant'), not(startsWith(parameters('appServicePlanSku'), 'P'))), createArray('appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'), createArray()), if(and(and(variables('createPostgres'), not(equals(parameters('postgresHighAvailability'), 'Disabled'))), equals(variables('postgresSkuTier'), 'Burstable')), createArray('postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), not(equals(parameters('postgresHighAvailability'), 'ZoneRedundant'))), createArray('postgresStandbyAvailabilityZone needs postgresHighAvailability = ZoneRedundant'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), equals(parameters('postgresStandbyAvailabilityZone'), parameters('postgresAvailabilityZone'))), createArray('postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'), createArray()))]",
+    "badOptions": "[concat(if(and(parameters('appServiceZoneRedundant'), not(startsWith(parameters('appServicePlanSku'), 'P'))), createArray('appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'), createArray()), if(and(and(variables('createPostgres'), not(equals(parameters('postgresHighAvailability'), 'Disabled'))), equals(variables('postgresSkuTier'), 'Burstable')), createArray('postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), not(equals(parameters('postgresHighAvailability'), 'ZoneRedundant'))), createArray('postgresStandbyAvailabilityZone needs postgresHighAvailability = ZoneRedundant'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), equals(parameters('postgresStandbyAvailabilityZone'), parameters('postgresAvailabilityZone'))), createArray('postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'), createArray()), if(and(variables('useExistingVault'), not(and(contains(toLower(parameters('existingKeyVaultResourceId')), '/providers/microsoft.keyvault/vaults/'), equals(length(variables('existingVaultIdParts')), 9)))), createArray('existingKeyVaultResourceId must be the resource id of a Key Vault (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.KeyVault/vaults/<name>)'), createArray()), if(and(variables('useExistingRegistry'), not(and(contains(toLower(parameters('existingContainerRegistryResourceId')), '/providers/microsoft.containerregistry/registries/'), equals(length(variables('existingRegistryIdParts')), 9)))), createArray('existingContainerRegistryResourceId must be the resource id of a container registry (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.ContainerRegistry/registries/<name>)'), createArray()))]",
     "planSku": "[if(empty(variables('badOptions')), parameters('appServicePlanSku'), fail(format('Change these options: {0}', join(variables('badOptions'), '; '))))]",
     "vnetId": "[substring(variables('appSubnetId'), 0, lastIndexOf(variables('appSubnetId'), '/subnets/'))]",
     "createSiteZone": "[empty(parameters('webAppPrivateDnsZoneResourceId'))]",
     "createPostgresZone": "[and(variables('createPostgres'), empty(parameters('postgresPrivateDnsZoneResourceId')))]",
-    "createVaultZone": "[empty(parameters('keyVaultPrivateDnsZoneResourceId'))]",
+    "createVaultZone": "[and(variables('vaultEndpointNeeded'), empty(parameters('keyVaultPrivateDnsZoneResourceId')))]",
+    "createRegistryZone": "[and(variables('registryEndpointNeeded'), empty(parameters('containerRegistryPrivateDnsZoneResourceId')))]",
     "siteZoneId": "[if(variables('createSiteZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurewebsites.net'), parameters('webAppPrivateDnsZoneResourceId'))]",
     "postgresZoneId": "[if(variables('createPostgresZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.postgres.database.azure.com'), parameters('postgresPrivateDnsZoneResourceId'))]",
-    "vaultZoneId": "[if(variables('createVaultZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net'), parameters('keyVaultPrivateDnsZoneResourceId'))]"
+    "vaultZoneId": "[if(variables('createVaultZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net'), parameters('keyVaultPrivateDnsZoneResourceId'))]",
+    "registryZoneId": "[if(variables('createRegistryZone'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurecr.io'), parameters('containerRegistryPrivateDnsZoneResourceId'))]"
   },
   "resources": [
     {
@@ -364,6 +461,33 @@
       ]
     },
     {
+      "condition": "[variables('createRegistryZone')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2024-06-01",
+      "name": "privatelink.azurecr.io",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
+    },
+    {
+      "condition": "[variables('createRegistryZone')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.azurecr.io', format('link-{0}', parameters('appName')))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[variables('vnetId')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurecr.io')]"
+      ]
+    },
+    {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
       "apiVersion": "2023-01-31",
       "name": "[variables('identityName')]",
@@ -419,6 +543,102 @@
       ]
     },
     {
+      "condition": "[and(variables('useExistingVault'), parameters('existingKeyVaultPrivateEndpoint'))]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2024-05-01",
+      "name": "[take(format('pe-{0}-{1}', variables('vaultName'), parameters('appName')), 80)]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[variables('endpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "vault",
+            "properties": {
+              "privateLinkServiceId": "[parameters('existingKeyVaultResourceId')]",
+              "groupIds": [
+                "vault"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
+    },
+    {
+      "condition": "[and(variables('useExistingVault'), parameters('existingKeyVaultPrivateEndpoint'))]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', take(format('pe-{0}-{1}', variables('vaultName'), parameters('appName')), 80), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "vault",
+            "properties": {
+              "privateDnsZoneId": "[variables('vaultZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-{1}', variables('vaultName'), parameters('appName')), 80))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
+        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.vaultcore.azure.net', format('link-{0}', parameters('appName')))]"
+      ]
+    },
+    {
+      "condition": "[and(variables('useExistingRegistry'), parameters('existingContainerRegistryPrivateEndpoint'))]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2024-05-01",
+      "name": "[take(format('pe-{0}-{1}', variables('registryName'), parameters('appName')), 80)]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[variables('endpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "registry",
+            "properties": {
+              "privateLinkServiceId": "[parameters('existingContainerRegistryResourceId')]",
+              "groupIds": [
+                "registry"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
+    },
+    {
+      "condition": "[and(variables('useExistingRegistry'), parameters('existingContainerRegistryPrivateEndpoint'))]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', take(format('pe-{0}-{1}', variables('registryName'), parameters('appName')), 80), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "registry",
+            "properties": {
+              "privateDnsZoneId": "[variables('registryZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', take(format('pe-{0}-{1}', variables('registryName'), parameters('appName')), 80))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurecr.io')]",
+        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.azurecr.io', format('link-{0}', parameters('appName')))]"
+      ]
+    },
+    {
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2024-04-01",
       "name": "[format('asp-{0}', parameters('appName'))]",
@@ -427,7 +647,7 @@
       "kind": "linux",
       "sku": {
         "name": "[variables('planSku')]",
-        "capacity": "[if(parameters('appServiceZoneRedundant'), 2, 1)]"
+        "capacity": "[if(parameters('appServiceZoneRedundant'), max(2, parameters('appServiceInstanceCount')), parameters('appServiceInstanceCount'))]"
       },
       "properties": {
         "reserved": true,
@@ -443,7 +663,7 @@
       "name": "[parameters('appName')]",
       "location": "[parameters('location')]",
       "tags": "[parameters('tags')]",
-      "kind": "app,linux",
+      "kind": "[if(variables('useContainer'), 'app,linux,container', 'app,linux')]",
       "identity": {
         "type": "UserAssigned",
         "userAssignedIdentities": {
@@ -457,9 +677,12 @@
         "publicNetworkAccess": "Disabled",
         "clientAffinityEnabled": true,
         "virtualNetworkSubnetId": "[variables('appSubnetId')]",
+        "vnetImagePullEnabled": "[variables('useContainer')]",
         "siteConfig": {
-          "linuxFxVersion": "DOTNETCORE|10.0",
-          "appCommandLine": "dotnet AccessReviewPortal.dll",
+          "linuxFxVersion": "[if(variables('useContainer'), format('DOCKER|{0}/{1}', variables('registryLoginServer'), parameters('containerImage')), 'DOTNETCORE|10.0')]",
+          "appCommandLine": "[if(variables('useContainer'), '', 'dotnet AccessReviewPortal.dll')]",
+          "acrUseManagedIdentityCreds": "[variables('useContainer')]",
+          "acrUserManagedIdentityID": "[if(variables('useContainer'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId, null())]",
           "alwaysOn": true,
           "webSocketsEnabled": true,
           "http20Enabled": true,
@@ -470,30 +693,24 @@
         }
       },
       "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('vaultSubscriptionId'), variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', take(format('keyvault-{0}', variables('vaultName')), 64))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('registrySubscriptionId'), variables('registryResourceGroup')), 'Microsoft.Resources/deployments', take(format('registry-{0}', variables('registryName')), 64))]",
+        "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', take(format('pe-{0}-{1}', variables('registryName'), parameters('appName')), 80), 'default')]",
+        "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', take(format('pe-{0}-{1}', variables('vaultName'), parameters('appName')), 80), 'default')]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', take(format('keyvault-{0}', variables('vaultName')), 64))]",
-        "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]"
+        "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]",
+        "[resourceId('Microsoft.Resources/deployments', take(format('registry-{0}', variables('registryName')), 64))]"
       ]
     },
     {
       "type": "Microsoft.Web/sites/config",
       "apiVersion": "2024-04-01",
       "name": "[format('{0}/{1}', parameters('appName'), 'appsettings')]",
-      "properties": {
-        "SCM_DO_BUILD_DURING_DEPLOYMENT": "false",
-        "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
-        "Database__ApplyMigrationsOnStartup": "true",
-        "Database__Authentication": "[if(variables('useManagedIdentity'), 'ManagedIdentity', 'Password')]",
-        "Database__ManagedIdentityClientId": "[if(variables('useManagedIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId, '')]",
-        "Database__RootCertificate": "[if(variables('createPostgres'), '', parameters('existingServerCaCertificate'))]",
-        "Authentication__Mode": "EntraId",
-        "Portal__PublicBaseUrl": "[variables('portalUrl')]",
-        "AzureAd__TenantId": "[parameters('tenantId')]",
-        "AzureAd__ClientId": "[parameters('clientId')]",
-        "AzureAd__ClientSecret": "[format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-client-secret)', variables('vaultName'))]",
-        "ConnectionStrings__DefaultConnection": "[format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-db-connection)', variables('vaultName'))]"
-      },
+      "properties": "[union(if(variables('useContainer'), createObject('WEBSITES_PORT', '8080', 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', 'false'), createObject('SCM_DO_BUILD_DURING_DEPLOYMENT', 'false')), createObject('ASPNETCORE_FORWARDEDHEADERS_ENABLED', 'true', 'Database__ApplyMigrationsOnStartup', 'true', 'Database__Authentication', if(variables('useManagedIdentity'), 'ManagedIdentity', 'Password'), 'Database__ManagedIdentityClientId', if(variables('useManagedIdentity'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId, ''), 'Database__RootCertificate', if(variables('createPostgres'), '', parameters('existingServerCaCertificate')), 'Authentication__Mode', 'EntraId', 'Portal__PublicBaseUrl', variables('portalUrl'), 'AzureAd__TenantId', parameters('tenantId'), 'AzureAd__ClientId', parameters('clientId'), 'AzureAd__ClientSecret', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', variables('vaultName'), variables('clientSecretName')), 'ConnectionStrings__DefaultConnection', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', variables('vaultName'), variables('connectionSecretName'))))]",
       "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('vaultSubscriptionId'), variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', take(format('keyvault-{0}', variables('vaultName')), 64))]",
+        "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', take(format('pe-{0}-{1}', variables('vaultName'), parameters('appName')), 80), 'default')]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', take(format('keyvault-{0}', variables('vaultName')), 64))]",
         "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('pe-{0}', variables('serverName')), 'default')]",
@@ -968,6 +1185,7 @@
       ]
     },
     {
+      "condition": "[not(variables('useExistingVault'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "[take(format('keyvault-{0}', variables('vaultName')), 64)]",
@@ -1189,6 +1407,435 @@
         "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
         "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.vaultcore.azure.net', format('link-{0}', parameters('appName')))]"
       ]
+    },
+    {
+      "condition": "[variables('useExistingVault')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[take(format('keyvault-{0}', variables('vaultName')), 64)]",
+      "subscriptionId": "[variables('vaultSubscriptionId')]",
+      "resourceGroup": "[variables('vaultResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vaultName": {
+            "value": "[variables('vaultName')]"
+          },
+          "clientSecret": {
+            "value": "[parameters('clientSecret')]"
+          },
+          "connectionString": "[if(not(variables('createPostgres')), createObject('value', parameters('existingServerConnectionString')), if(variables('useManagedIdentity'), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName'))), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))))]",
+          "clientSecretName": {
+            "value": "[variables('clientSecretName')]"
+          },
+          "connectionSecretName": {
+            "value": "[variables('connectionSecretName')]"
+          },
+          "access": {
+            "value": "[parameters('existingKeyVaultAccess')]"
+          },
+          "identityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+          },
+          "identityPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.49.2.45890",
+              "templateHash": "5048006656164709523"
+            }
+          },
+          "parameters": {
+            "vaultName": {
+              "type": "string"
+            },
+            "clientSecret": {
+              "type": "securestring"
+            },
+            "connectionString": {
+              "type": "securestring"
+            },
+            "clientSecretName": {
+              "type": "string"
+            },
+            "connectionSecretName": {
+              "type": "string"
+            },
+            "access": {
+              "type": "string",
+              "defaultValue": "Secrets",
+              "allowedValues": [
+                "Secrets",
+                "Vault"
+              ],
+              "metadata": {
+                "description": "Secrets = the role on the two secrets only (for a vault that other apps also use). Vault = the role on the whole vault."
+              }
+            },
+            "identityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource id of the user-assigned managed identity of the web app."
+              }
+            },
+            "identityPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal id of the same identity."
+              }
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('vaultName'), parameters('clientSecretName'))]",
+              "properties": {
+                "value": "[parameters('clientSecret')]",
+                "contentType": "Client secret of the app registration (Access Review portal)"
+              }
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('vaultName'), parameters('connectionSecretName'))]",
+              "properties": {
+                "value": "[parameters('connectionString')]",
+                "contentType": "Npgsql connection string (Access Review portal)"
+              }
+            },
+            {
+              "condition": "[equals(parameters('access'), 'Vault')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), parameters('identityId'), variables('keyVaultSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "condition": "[equals(parameters('access'), 'Secrets')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('vaultName'), parameters('clientSecretName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults/secrets', parameters('vaultName'), parameters('clientSecretName')), parameters('identityId'), variables('keyVaultSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('vaultName'), parameters('clientSecretName'))]"
+              ]
+            },
+            {
+              "condition": "[equals(parameters('access'), 'Secrets')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('vaultName'), parameters('connectionSecretName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults/secrets', parameters('vaultName'), parameters('connectionSecretName')), parameters('identityId'), variables('keyVaultSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults/secrets', parameters('vaultName'), parameters('connectionSecretName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('vaultName')]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
+    },
+    {
+      "condition": "[and(variables('useContainer'), not(variables('useExistingRegistry')))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[take(format('registry-{0}', variables('registryName')), 64)]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "registryName": {
+            "value": "[variables('registryName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "endpointSubnetId": {
+            "value": "[variables('endpointSubnetId')]"
+          },
+          "privateDnsZoneId": {
+            "value": "[variables('registryZoneId')]"
+          },
+          "identityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+          },
+          "identityPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.49.2.45890",
+              "templateHash": "4777733039444584242"
+            }
+          },
+          "parameters": {
+            "registryName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "endpointSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet of the private endpoint of the registry."
+              }
+            },
+            "privateDnsZoneId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private DNS zone privatelink.azurecr.io."
+              }
+            },
+            "identityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource id of the user-assigned managed identity of the web app."
+              }
+            },
+            "identityPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal id of the same identity."
+              }
+            }
+          },
+          "variables": {
+            "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d",
+            "repositoryReaderRoleId": "b93aa761-3e63-49ed-ac28-beffa264f7ac"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2025-11-01",
+              "name": "[parameters('registryName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Premium"
+              },
+              "properties": {
+                "adminUserEnabled": false,
+                "anonymousPullEnabled": false,
+                "publicNetworkAccess": "Disabled",
+                "networkRuleBypassOptions": "AzureServices"
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', parameters('registryName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('endpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "registry",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+                      "groupIds": [
+                        "registry"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', parameters('registryName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "registry",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', parameters('registryName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), parameters('identityId'), 'pull')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', if(equals(tryGet(reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2025-11-01'), 'roleAssignmentMode'), 'AbacRepositoryPermissions'), variables('repositoryReaderRoleId'), variables('acrPullRoleId')))]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('registryName')]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]"
+            },
+            "loginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2025-11-01').loginServer]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.azurecr.io')]",
+        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.azurecr.io', format('link-{0}', parameters('appName')))]"
+      ]
+    },
+    {
+      "condition": "[variables('useExistingRegistry')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[take(format('registry-{0}', variables('registryName')), 64)]",
+      "subscriptionId": "[variables('registrySubscriptionId')]",
+      "resourceGroup": "[variables('registryResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "registryName": {
+            "value": "[variables('registryName')]"
+          },
+          "identityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+          },
+          "identityPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.49.2.45890",
+              "templateHash": "10778649998070556910"
+            }
+          },
+          "parameters": {
+            "registryName": {
+              "type": "string"
+            },
+            "identityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource id of the user-assigned managed identity of the web app."
+              }
+            },
+            "identityPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal id of the same identity."
+              }
+            }
+          },
+          "variables": {
+            "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d",
+            "repositoryReaderRoleId": "b93aa761-3e63-49ed-ac28-beffa264f7ac"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), parameters('identityId'), 'pull')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', if(equals(tryGet(reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2025-11-01'), 'roleAssignmentMode'), 'AbacRepositoryPermissions'), variables('repositoryReaderRoleId'), variables('acrPullRoleId')))]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ],
+          "outputs": {
+            "loginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2025-11-01').loginServer]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
     }
   ],
   "outputs": {
@@ -1226,6 +1873,20 @@
     "identityName": {
       "type": "string",
       "value": "[variables('identityName')]"
+    },
+    "containerRegistryLoginServer": {
+      "type": "string",
+      "metadata": {
+        "description": "Container: login server of the registry, for the workflow variable ACR_LOGIN_SERVER."
+      },
+      "value": "[if(variables('useContainer'), variables('registryLoginServer'), '')]"
+    },
+    "containerRegistryId": {
+      "type": "string",
+      "metadata": {
+        "description": "Container: resource id of the registry. The GitHub identity needs AcrPush on it (Container Registry Repository Writer with ABAC repository permissions)."
+      },
+      "value": "[if(variables('useContainer'), resourceId(variables('registrySubscriptionId'), variables('registryResourceGroup'), 'Microsoft.ContainerRegistry/registries', variables('registryName')), '')]"
     }
   }
 }

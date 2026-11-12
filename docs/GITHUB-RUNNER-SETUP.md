@@ -225,7 +225,7 @@ sudo docker build -t access-review-runner:1 .
 
 A checkout on Windows can give `start.sh` Windows line endings. Fix them with `sed -i 's/\r$//' start.sh Dockerfile`.
 
-For the App Service workflow (`.github/workflows/deploy-appservice.yml`), add Azure CLI to the image: `sudo docker build --build-arg AZURE_CLI=true -t access-review-runner:1 .`. That workflow does not use Docker, so you can leave out the Docker socket in step 5. Setup of the workflow: [DEPLOY-AZURE-APP-SERVICE.md](DEPLOY-AZURE-APP-SERVICE.md#deploy-with-github-actions-optional).
+For the App Service workflow (`.github/workflows/deploy-appservice.yml`), add Azure CLI to the image: `sudo docker build --build-arg AZURE_CLI=true -t access-review-runner:1 .`. That workflow does not use Docker, so you can leave out the Docker socket in step 5. The container workflow of option D (`.github/workflows/deploy-appservice-container.yml`) needs both: Azure CLI in the image and the Docker socket. Setup of the workflows: [DEPLOY-AZURE-APP-SERVICE.md](DEPLOY-AZURE-APP-SERVICE.md#deploy-with-github-actions-optional).
 
 ## Step 5. Start the runner
 

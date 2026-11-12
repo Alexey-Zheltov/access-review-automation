@@ -1,0 +1,10 @@
+<Project>
+  <!-- NuGet audit: the build stops when a package, also a transitive one, has a known vulnerability of high or critical
+       severity (NU1903, NU1904). Low and moderate ones stay warnings. The vulnerability data comes from the package source
+       (nuget.org). It applies to every build: local, CI, the deploy workflows and docker build. -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>
