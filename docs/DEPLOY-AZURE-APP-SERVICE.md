@@ -253,7 +253,7 @@ Use this option when the portal must be reachable only from your network. The te
 Checks before the deployment:
 
 - The portal form lists only the virtual networks of the chosen region, subnets delegated to `Microsoft.Web/serverFarms` for App Service, and subnets without delegation for the private endpoints.
-- On the tab **Database** it reads the PostgreSQL offer of the region and your vCore quota, and shows the free quota. It stops you when the size is not offered, the quota of the size family or the total quota is too small (a standby counts double), the region is restricted for your subscription, or high availability does not fit the size or the region.
+- On the tab **Database** it reads the PostgreSQL offer of the region and your vCore quota, and shows the free quota. A red message tells you when the size is not offered, the quota of the size family or the total quota is too small (a standby counts double), the region is restricted for your subscription, or high availability does not fit the size or the region. Choose other values before you create the deployment.
 - The template itself stops before it creates anything when a subnet value is not a subnet resource id, zone redundancy is chosen with a Basic plan, or high availability with a Burstable size. Azure checks the App Service quota at **Review + create**.
 - Some limits are known only when Azure creates the server (`SkuNotAvailable`). The template therefore creates PostgreSQL first: with such a size the deployment stops after about two minutes and creates nothing else but the managed identity.
 
