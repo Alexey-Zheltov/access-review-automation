@@ -127,10 +127,6 @@
             {
               "regex": "^[a-z0-9][a-z0-9-]{0,56}[a-z0-9]$",
               "message": "2-58 characters: lower-case letters, digits and hyphens. No hyphen at the start or the end."
-            },
-            {
-              "isValid": "[or(empty(basics('appName')), not(equals(basics('nameApi').nameAvailable, false)))]",
-              "message": "[concat('This name is not available: ', basics('nameApi').message)]"
             }
           ]
         }
@@ -146,6 +142,15 @@
             "type": "Microsoft.Web/sites"
           }
         }
+      },
+      {
+        "name": "nameTaken",
+        "type": "Microsoft.Common.InfoBox",
+        "options": {
+          "style": "Warning",
+          "text": "[concat('This name is already in use: ', basics('nameApi').message, ' If it is your own web app from an earlier attempt of this deployment, continue: the deployment updates it. Otherwise choose another name.')]"
+        },
+        "visible": "[and(not(empty(basics('appName'))), equals(basics('nameApi').nameAvailable, false), equals(basics('nameApi').reason, 'AlreadyExists'))]"
       },
       {
         "name": "appServicePlanSku",
