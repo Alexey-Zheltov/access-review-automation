@@ -11,7 +11,14 @@ public static class PortalEndpoints
 {
     public static void MapPortalEndpoints(this WebApplication app)
     {
-        app.MapGet("/healthz", () => Results.Text("ok")).AllowAnonymous();
+        // Commit of the container image (Dockerfile, build argument SOURCE_REVISION). The deployment workflow waits for it,
+        // because App Service keeps the old container running until the new one answers.
+        var revision = Environment.GetEnvironmentVariable("PORTAL_REVISION");
+        app.MapGet("/healthz", (HttpResponse response) =>
+        {
+            if (!string.IsNullOrEmpty(revision)) response.Headers["X-Portal-Revision"] = revision;
+            return Results.Text("ok");
+        }).AllowAnonymous();
 
         var group = app.MapGroup("").RequireAuthorization(PortalPolicies.Reviewer);
 

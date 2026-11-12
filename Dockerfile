@@ -41,6 +41,9 @@ ENV ASPNETCORE_HTTP_PORTS=8080
 COPY --from=build /app/publish .
 # libgssapi-krb5-2 removes a noisy Npgsql start-up message about missing Kerberos libraries.
 RUN apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-2 && rm -rf /var/lib/apt/lists/*
+# Commit of the build, set by the workflows (--build-arg SOURCE_REVISION=<commit>). /healthz returns it in the header X-Portal-Revision.
+ARG SOURCE_REVISION=""
+ENV PORTAL_REVISION=${SOURCE_REVISION}
 USER $APP_UID
 EXPOSE 8080 8443
 ENTRYPOINT ["dotnet", "AccessReviewPortal.dll"]

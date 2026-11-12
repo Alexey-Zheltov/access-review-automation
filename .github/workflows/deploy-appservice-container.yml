@@ -69,7 +69,8 @@ jobs:
           if [ -z "$LOGIN_SERVER" ]; then echo "::error::Set the variable ACR_LOGIN_SERVER, for example crcontoso.azurecr.io"; exit 1; fi
           image="$LOGIN_SERVER/$REPOSITORY:${GITHUB_SHA::12}"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
-          docker build --target runtime --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+          docker build --target runtime --build-arg SOURCE_REVISION="$GITHUB_SHA" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -t "$image" -t "$LOGIN_SERVER/$REPOSITORY:latest" .
 
       - name: Sign in to Azure (OpenID Connect)
@@ -92,16 +93,17 @@ jobs:
             --linux-fx-version "DOCKER|$IMAGE" --only-show-errors --output none
           echo "The web app runs $IMAGE after the restart."
 
+      # App Service keeps the old container running until the new one answers. So the check waits for the commit of this run
+      # in the header X-Portal-Revision: an image that does not start does not pass.
       - name: Health check
         run: |
           url="https://$APP_NAME.azurewebsites.net/healthz"
-          # The old container answers until the restart: wait for it first.
-          sleep 60
-          for i in $(seq 1 48); do
-            if [ "$(curl -fsS --max-time 20 "$url" 2>/dev/null)" = "ok" ]; then echo "The portal answers: $url"; exit 0; fi
+          for i in $(seq 1 54); do
+            headers=$(curl -fsS --max-time 20 -D - -o /dev/null "$url" 2>/dev/null | tr -d '\r')
+            if printf '%s\n' "$headers" | grep -qixF "x-portal-revision: $GITHUB_SHA"; then echo "The portal answers with commit $GITHUB_SHA: $url"; exit 0; fi
             sleep 10
           done
-          echo "::error::No 'ok' from $url after 9 minutes. Container log: az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_NAME"
+          echo "::error::$url does not answer with commit $GITHUB_SHA after 9 minutes. Container log: az webapp log tail --resource-group $RESOURCE_GROUP --name $APP_NAME"
           exit 1
 
       - name: Sign out of Azure and the registry

@@ -355,11 +355,12 @@ With `deploymentType=Container` the web app runs the image from the registry ins
 $loginServer = az deployment group show --resource-group $resourceGroup --name accessreview `
     --query properties.outputs.containerRegistryLoginServer.value -o tsv
 az acr login --name $loginServer.Split('.')[0]
-docker build --target runtime -t "$loginServer/access-review-portal:latest" .
+docker build --target runtime --build-arg SOURCE_REVISION=$(git rev-parse HEAD) -t "$loginServer/access-review-portal:latest" .
 docker push "$loginServer/access-review-portal:latest"
 az webapp restart --resource-group $resourceGroup --name $appName
 ```
 
+- App Service keeps the old container running until the new one answers. `/healthz` returns the commit of the image in the header `X-Portal-Revision`: check it from your network with `curl -sI https://<app-name>.azurewebsites.net/healthz`.
 - The template sets the image tag `latest`. A new run of the template switches the web app back to `latest`, so push `latest` with every build. The workflow `deploy-appservice-container.yml` pushes the tags `<commit>` and `latest` and switches the web app to `<commit>` ([Deploy with GitHub Actions](#deploy-with-github-actions-optional)).
 - The web app pulls the image with its managed identity `id-<app-name>` through the VNet integration. No registry password is stored.
 - Microsoft Defender for Cloud scans the images in the registry when the subscription of the registry has the plan **Defender for Containers** or **Defender CSPM** with agentless container vulnerability assessment. The findings are in **Defender for Cloud > Recommendations**: "Azure registry container images should have vulnerabilities resolved". A registry without public access must allow trusted Microsoft services; the template sets this for a new registry.
