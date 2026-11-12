@@ -39,7 +39,7 @@ param location string = resourceGroup().location
 @allowed(['B1', 'B2', 'B3', 'P0v3', 'P1v3', 'P2v3', 'P3v3', 'P1mv3', 'P2mv3'])
 param appServicePlanSku string = 'P0v3'
 
-@description('Zone redundancy of the App Service plan: two instances in different availability zones. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance.')
+@description('Zone redundancy of the App Service plan: two instances in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance.')
 param appServiceZoneRedundant bool = false
 
 @description('Microsoft Entra tenant id of the app registration.')
@@ -116,6 +116,14 @@ param postgresVersion string = '18'
 @allowed(['Disabled', 'ZoneRedundant', 'SameZone'])
 param postgresHighAvailability string = 'Disabled'
 
+@description('Availability zone of the PostgreSQL server: 1, 2 or 3. Empty = Azure chooses. Used only when Azure creates the server: a later deployment with another zone does not move the server.')
+@allowed(['', '1', '2', '3'])
+param postgresAvailabilityZone string = ''
+
+@description('With postgresHighAvailability = ZoneRedundant: availability zone of the standby server, 1, 2 or 3, another zone than postgresAvailabilityZone. Empty = Azure chooses.')
+@allowed(['', '1', '2', '3'])
+param postgresStandbyAvailabilityZone string = ''
+
 @description('Key Vault name (3-24 characters, globally unique). Empty = a name derived from the resource group and the app name.')
 @maxLength(24)
 param keyVaultName string = ''
@@ -158,7 +166,9 @@ var endpointSubnetId = privateEndpointSubnetResourceId
 // Combinations that Azure rejects. The check stops the deployment before anything is created.
 var badOptions = concat(
   appServiceZoneRedundant && !startsWith(appServicePlanSku, 'P') ? ['appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'] : [],
-  createPostgres && postgresHighAvailability != 'Disabled' && postgresSkuTier == 'Burstable' ? ['postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'] : []
+  createPostgres && postgresHighAvailability != 'Disabled' && postgresSkuTier == 'Burstable' ? ['postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'] : [],
+  createPostgres && !empty(postgresStandbyAvailabilityZone) && postgresHighAvailability != 'ZoneRedundant' ? ['postgresStandbyAvailabilityZone needs postgresHighAvailability = ZoneRedundant'] : [],
+  createPostgres && !empty(postgresStandbyAvailabilityZone) && postgresStandbyAvailabilityZone == postgresAvailabilityZone ? ['postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'] : []
 )
 var planSku = empty(badOptions) ? appServicePlanSku : fail('Change these options: ${join(badOptions, '; ')}')
 // lastIndexOf is not case-sensitive.
@@ -259,6 +269,8 @@ module postgres 'postgres-flexible.bicep' = if (createPostgres) {
     skuTier: postgresSkuTier
     storageSizeGB: postgresStorageSizeGB
     highAvailability: postgresHighAvailability
+    availabilityZone: postgresAvailabilityZone
+    standbyAvailabilityZone: postgresStandbyAvailabilityZone
     databaseName: databaseName
     publicNetworkAccess: false
     allowAzureServices: false

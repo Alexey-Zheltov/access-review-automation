@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "14386488197903760239"
+      "templateHash": "11075617820643091079"
     }
   },
   "parameters": {
@@ -46,7 +46,7 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Zone redundancy of the App Service plan: two instances in different availability zones. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance."
+        "description": "Zone redundancy of the App Service plan: two instances in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance."
       }
     },
     "tenantId": {
@@ -202,6 +202,32 @@
         "description": "High availability of PostgreSQL: ZoneRedundant = standby server in another availability zone, SameZone = standby in the same zone. Not with Burstable sizes. The standby doubles the compute cost."
       }
     },
+    "postgresAvailabilityZone": {
+      "type": "string",
+      "defaultValue": "",
+      "allowedValues": [
+        "",
+        "1",
+        "2",
+        "3"
+      ],
+      "metadata": {
+        "description": "Availability zone of the PostgreSQL server: 1, 2 or 3. Empty = Azure chooses. Used only when Azure creates the server: a later deployment with another zone does not move the server."
+      }
+    },
+    "postgresStandbyAvailabilityZone": {
+      "type": "string",
+      "defaultValue": "",
+      "allowedValues": [
+        "",
+        "1",
+        "2",
+        "3"
+      ],
+      "metadata": {
+        "description": "With postgresHighAvailability = ZoneRedundant: availability zone of the standby server, 1, 2 or 3, another zone than postgresAvailabilityZone. Empty = Azure chooses."
+      }
+    },
     "keyVaultName": {
       "type": "string",
       "defaultValue": "",
@@ -245,7 +271,7 @@
     "badSubnetParameters": "[concat(if(and(contains(toLower(parameters('appSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('appSubnetResourceId')), '/subnets/')), createArray(), createArray('appSubnetResourceId')), if(and(contains(toLower(parameters('privateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('privateEndpointSubnetResourceId')), '/subnets/')), createArray(), createArray('privateEndpointSubnetResourceId')))]",
     "appSubnetId": "[if(empty(variables('badSubnetParameters')), parameters('appSubnetResourceId'), fail(format('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: {0}', join(variables('badSubnetParameters'), ', '))))]",
     "endpointSubnetId": "[parameters('privateEndpointSubnetResourceId')]",
-    "badOptions": "[concat(if(and(parameters('appServiceZoneRedundant'), not(startsWith(parameters('appServicePlanSku'), 'P'))), createArray('appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'), createArray()), if(and(and(variables('createPostgres'), not(equals(parameters('postgresHighAvailability'), 'Disabled'))), equals(variables('postgresSkuTier'), 'Burstable')), createArray('postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'), createArray()))]",
+    "badOptions": "[concat(if(and(parameters('appServiceZoneRedundant'), not(startsWith(parameters('appServicePlanSku'), 'P'))), createArray('appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'), createArray()), if(and(and(variables('createPostgres'), not(equals(parameters('postgresHighAvailability'), 'Disabled'))), equals(variables('postgresSkuTier'), 'Burstable')), createArray('postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), not(equals(parameters('postgresHighAvailability'), 'ZoneRedundant'))), createArray('postgresStandbyAvailabilityZone needs postgresHighAvailability = ZoneRedundant'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), equals(parameters('postgresStandbyAvailabilityZone'), parameters('postgresAvailabilityZone'))), createArray('postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'), createArray()))]",
     "planSku": "[if(empty(variables('badOptions')), parameters('appServicePlanSku'), fail(format('Change these options: {0}', join(variables('badOptions'), '; '))))]",
     "vnetId": "[substring(variables('appSubnetId'), 0, lastIndexOf(variables('appSubnetId'), '/subnets/'))]",
     "createSiteZone": "[empty(parameters('webAppPrivateDnsZoneResourceId'))]",
@@ -606,6 +632,12 @@
           "highAvailability": {
             "value": "[parameters('postgresHighAvailability')]"
           },
+          "availabilityZone": {
+            "value": "[parameters('postgresAvailabilityZone')]"
+          },
+          "standbyAvailabilityZone": {
+            "value": "[parameters('postgresStandbyAvailabilityZone')]"
+          },
           "databaseName": {
             "value": "[variables('databaseName')]"
           },
@@ -626,7 +658,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.49.2.45890",
-              "templateHash": "9572168885646323423"
+              "templateHash": "11091686564885456305"
             }
           },
           "parameters": {
@@ -716,6 +748,32 @@
                 "SameZone"
               ]
             },
+            "availabilityZone": {
+              "type": "string",
+              "defaultValue": "",
+              "allowedValues": [
+                "",
+                "1",
+                "2",
+                "3"
+              ],
+              "metadata": {
+                "description": "Availability zone of the server (1, 2 or 3). Empty = Azure chooses. Used only when Azure creates the server: a later deployment with another zone does not move it."
+              }
+            },
+            "standbyAvailabilityZone": {
+              "type": "string",
+              "defaultValue": "",
+              "allowedValues": [
+                "",
+                "1",
+                "2",
+                "3"
+              ],
+              "metadata": {
+                "description": "With highAvailability = ZoneRedundant: availability zone of the standby server, another zone than availabilityZone. Empty = Azure chooses."
+              }
+            },
             "databaseName": {
               "type": "string",
               "defaultValue": "accessreview",
@@ -799,28 +857,7 @@
                 "name": "[parameters('skuName')]",
                 "tier": "[parameters('skuTier')]"
               },
-              "properties": {
-                "version": "[parameters('postgresVersion')]",
-                "administratorLogin": "[if(parameters('passwordAuth'), parameters('administratorLogin'), null())]",
-                "administratorLoginPassword": "[if(parameters('passwordAuth'), parameters('administratorPassword'), null())]",
-                "storage": {
-                  "storageSizeGB": "[parameters('storageSizeGB')]",
-                  "autoGrow": "Enabled"
-                },
-                "backup": {
-                  "backupRetentionDays": "[parameters('backupRetentionDays')]",
-                  "geoRedundantBackup": "Disabled"
-                },
-                "highAvailability": {
-                  "mode": "[parameters('highAvailability')]"
-                },
-                "network": "[if(variables('privateAccess'), createObject('delegatedSubnetResourceId', parameters('delegatedSubnetResourceId'), 'privateDnsZoneArmResourceId', parameters('privateDnsZoneArmResourceId'), 'publicNetworkAccess', 'Disabled'), createObject('publicNetworkAccess', if(parameters('publicNetworkAccess'), 'Enabled', 'Disabled')))]",
-                "authConfig": {
-                  "activeDirectoryAuth": "[if(variables('entraAuth'), 'Enabled', 'Disabled')]",
-                  "passwordAuth": "[if(parameters('passwordAuth'), 'Enabled', 'Disabled')]",
-                  "tenantId": "[if(variables('entraAuth'), subscription().tenantId, null())]"
-                }
-              }
+              "properties": "[union(createObject('version', parameters('postgresVersion'), 'administratorLogin', if(parameters('passwordAuth'), parameters('administratorLogin'), null()), 'administratorLoginPassword', if(parameters('passwordAuth'), parameters('administratorPassword'), null()), 'storage', createObject('storageSizeGB', parameters('storageSizeGB'), 'autoGrow', 'Enabled'), 'backup', createObject('backupRetentionDays', parameters('backupRetentionDays'), 'geoRedundantBackup', 'Disabled'), 'highAvailability', union(createObject('mode', parameters('highAvailability')), if(and(equals(parameters('highAvailability'), 'ZoneRedundant'), not(empty(parameters('standbyAvailabilityZone')))), createObject('standbyAvailabilityZone', parameters('standbyAvailabilityZone')), createObject())), 'network', if(variables('privateAccess'), createObject('delegatedSubnetResourceId', parameters('delegatedSubnetResourceId'), 'privateDnsZoneArmResourceId', parameters('privateDnsZoneArmResourceId'), 'publicNetworkAccess', 'Disabled'), createObject('publicNetworkAccess', if(parameters('publicNetworkAccess'), 'Enabled', 'Disabled'))), 'authConfig', createObject('activeDirectoryAuth', if(variables('entraAuth'), 'Enabled', 'Disabled'), 'passwordAuth', if(parameters('passwordAuth'), 'Enabled', 'Disabled'), 'tenantId', if(variables('entraAuth'), subscription().tenantId, null()))), if(empty(parameters('availabilityZone')), createObject(), createObject('availabilityZone', parameters('availabilityZone'))))]"
             },
             {
               "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",

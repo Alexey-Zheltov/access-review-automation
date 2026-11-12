@@ -47,6 +47,14 @@ param backupRetentionDays int = 14
 @allowed(['Disabled', 'ZoneRedundant', 'SameZone'])
 param highAvailability string = 'Disabled'
 
+@description('Availability zone of the server (1, 2 or 3). Empty = Azure chooses. Used only when Azure creates the server: a later deployment with another zone does not move it.')
+@allowed(['', '1', '2', '3'])
+param availabilityZone string = ''
+
+@description('With highAvailability = ZoneRedundant: availability zone of the standby server, another zone than availabilityZone. Empty = Azure chooses.')
+@allowed(['', '1', '2', '3'])
+param standbyAvailabilityZone string = ''
+
 @description('Database used by the portal.')
 param databaseName string = 'accessreview'
 
@@ -98,7 +106,7 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
     name: skuName
     tier: skuTier
   }
-  properties: {
+  properties: union({
     version: postgresVersion
     administratorLogin: passwordAuth ? administratorLogin : null
     administratorLoginPassword: passwordAuth ? administratorPassword : null
@@ -110,9 +118,9 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
       backupRetentionDays: backupRetentionDays
       geoRedundantBackup: 'Disabled'
     }
-    highAvailability: {
+    highAvailability: union({
       mode: highAvailability
-    }
+    }, highAvailability == 'ZoneRedundant' && !empty(standbyAvailabilityZone) ? { standbyAvailabilityZone: standbyAvailabilityZone } : {})
     network: privateAccess
       ? {
           delegatedSubnetResourceId: delegatedSubnetResourceId
@@ -127,7 +135,7 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
       passwordAuth: passwordAuth ? 'Enabled' : 'Disabled'
       tenantId: entraAuth ? subscription().tenantId : null
     }
-  }
+  }, empty(availabilityZone) ? {} : { availabilityZone: availabilityZone })
 }
 
 resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2025-08-01' = {

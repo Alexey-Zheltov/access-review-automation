@@ -245,16 +245,17 @@ Use this option when the portal must be reachable only from your network. The te
 |---|---|
 | Web app | Private endpoint, public network access disabled. VNet integration: all outbound traffic goes through your network. |
 | PostgreSQL | Azure Database for PostgreSQL Flexible Server with a private endpoint, public network access disabled. Or your own server (option C). |
-| Key Vault | A new Key Vault with a private endpoint, public network access disabled. It keeps the client secret and the connection string. In the resource group of the deployment, or in another existing resource group of the same subscription (`keyVaultResourceGroup`; in the portal form: tab **Key Vault**). |
+| Key Vault | A new Key Vault with a private endpoint, public network access disabled. It keeps the client secret and the connection string. In the resource group of the deployment, or in another existing resource group of the same subscription (`keyVaultResourceGroup`; in the portal form: section **Key Vault**). |
 | Subnets (existing) | **App Service subnet**: only for App Service and delegated to `Microsoft.Web/serverFarms` before the deployment (the template does not change your subnets), `/28` or larger, `/26` recommended. **Private endpoint subnet**: the three private endpoints. Both in the region of the deployment. |
 | Private DNS zones | `privatelink.azurewebsites.net`, `privatelink.postgres.database.azure.com`, `privatelink.vaultcore.azure.net`: your existing zones, or new zones in the resource group, linked to the virtual network of the App Service subnet. |
-| Zone redundancy (optional) | App Service plan with two instances in different availability zones (`appServiceZoneRedundant=true`, Premium plan). PostgreSQL high availability with a standby server (`postgresHighAvailability=ZoneRedundant` or `SameZone`, not with Burstable sizes; the standby doubles the compute cost). The region must have availability zones. |
+| Zone redundancy (optional) | App Service plan with two instances in different availability zones (`appServiceZoneRedundant=true`, Premium plan). Azure chooses the zones of the instances; App Service has no setting for them. PostgreSQL high availability with a standby server (`postgresHighAvailability=ZoneRedundant` or `SameZone`, not with Burstable sizes; the standby doubles the compute cost). The region must have availability zones. |
+| PostgreSQL zones (optional) | The zone of the server (`postgresAvailabilityZone`: 1, 2 or 3) and, with `ZoneRedundant`, the zone of the standby (`postgresStandbyAvailabilityZone`, another zone). Empty = Azure chooses. Azure uses the zones only when it creates the server. A later deployment with other zones does not move the server or the standby. |
 
 Checks before the deployment:
 
 - The portal form lists only the virtual networks of the chosen region, subnets delegated to `Microsoft.Web/serverFarms` for App Service, and subnets without delegation for the private endpoints.
-- On the tab **Database** it reads the PostgreSQL offer of the region and your vCore quota, and shows the free quota. A red message tells you when the size is not offered, the quota of the size family or the total quota is too small (a standby counts double), the region is restricted for your subscription, or high availability does not fit the size or the region. Choose other values before you create the deployment.
-- The template itself stops before it creates anything when a subnet value is not a subnet resource id, zone redundancy is chosen with a Basic plan, or high availability with a Burstable size. Azure checks the App Service quota at **Review + create**.
+- In the section **Database** it reads the PostgreSQL offer of the region and your vCore quota, and shows the free quota. A red message tells you when the size is not offered, the quota of the size family or the total quota is too small (a standby counts double), the region is restricted for your subscription, high availability does not fit the size or the region, or the standby zone is the zone of the server. Choose other values before you create the deployment.
+- The template itself stops before it creates anything when a subnet value is not a subnet resource id, zone redundancy is chosen with a Basic plan, high availability with a Burstable size, or a standby zone without zone-redundant high availability or in the zone of the server. Azure checks the App Service quota at **Review + create**.
 - Some limits are known only when Azure creates the server (`SkuNotAvailable`). The template therefore creates PostgreSQL first: with such a size the deployment stops after about two minutes and creates nothing else but the managed identity.
 
 The PostgreSQL server gets the name from `postgresServerName` (portal form: **Server name**; empty = `psql-<app-name>`). The deployment step that creates it is named `postgres-<server name>`, the step of the Key Vault `keyvault-<vault name>`.
@@ -272,7 +273,7 @@ Agree with your network team before you deploy:
 https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.createUiDefinition.json
 ```
 
-The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`. The portal asks "Do you trust the authors code?": select **Yes, I trust the authors**. The form then reads your virtual networks, subnets and private DNS zones with your rights (read only) and lists them.
+The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`. The portal asks "Do you trust the authors code?": select **Yes, I trust the authors**. The form then reads your virtual networks, subnets and private DNS zones with your rights (read only) and lists them. The form is one page with the sections **Network**, **Web app**, **Database**, **Private DNS zones** and **Key Vault**.
 
 **Commands.** Find the resource ids of the subnets:
 
@@ -294,7 +295,7 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
 
 - Existing zones: add `webAppPrivateDnsZoneResourceId=<id> postgresPrivateDnsZoneResourceId=<id> keyVaultPrivateDnsZoneResourceId=<id>`.
 - Key Vault in another resource group: add `keyVaultResourceGroup=<resource group>`. You need Contributor and Role Based Access Control Administrator there too.
-- Zone redundancy: add `appServiceZoneRedundant=true` and `postgresHighAvailability=ZoneRedundant` (with a General Purpose size).
+- Zone redundancy: add `appServiceZoneRedundant=true` and `postgresHighAvailability=ZoneRedundant` (with a General Purpose size). To choose the PostgreSQL zones, add for example `postgresAvailabilityZone=1 postgresStandbyAvailabilityZone=2`.
 - `SkuNotAvailable` for PostgreSQL: this size is not available for your subscription in this region. Option D uses General Purpose `Standard_D2ds_v5` by default; Burstable sizes (`postgresSkuName=Standard_B2s`) are cheaper but not available everywhere. Choose another `postgresSkuName` and deploy again with the same values. The tier follows from the size.
 - Your own PostgreSQL server: add `databaseServer=ExistingServer existingServerConnectionString=$dbConnection` (option C).
 - The deployment stops before it creates anything if a subnet value is not a subnet resource id.
@@ -506,6 +507,8 @@ If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role
 | Problem | Check |
 |---|---|
 | Deployment: `SkuNotAvailable` | The PostgreSQL size is not available for your subscription in this region. Choose another region or size (`postgresSkuName`, `postgresSkuTier`). |
+| Deployment: `AvailabilityZoneNotAvailable` | The PostgreSQL size is not offered in this zone of the region. Choose another zone, or leave the zones empty: then Azure chooses. |
+| Azure portal: after **Review + create** the form keeps loading and **Create** stays grey | This happens in a form with more than one tab, for example your own copy of the form. When a form reads data from Azure, the Azure portal waits without end if you did not open every tab. Close the form, open it again, and open every tab before **Review + create**. The form of option D is one page. |
 | Deployment: `Conflict` on the App Service plan, "No available instances to satisfy this request. App Service is attempting to increase capacity." | The region has no free capacity for this plan size at the moment. Run the deployment again some minutes later (the template is idempotent), or choose another plan size or region. |
 | Deployment: `RequestDisallowedByPolicy` | A policy blocks a resource or a setting. The message names the policy. See [PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy). |
 | Deployment: `AuthorizationFailed`, `LinkedAuthorizationFailed` | Rights at the scope in the message. See [PERMISSIONS.md, section 9](PERMISSIONS.md#9-errors-and-what-they-mean). |

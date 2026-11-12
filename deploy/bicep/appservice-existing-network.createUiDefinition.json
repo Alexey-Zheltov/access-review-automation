@@ -116,154 +116,160 @@
         ]
       },
       {
-        "name": "appName",
-        "type": "Microsoft.Common.TextBox",
-        "label": "App name",
-        "toolTip": "Name of the web app. The portal address is https://<App name>.azurewebsites.net. Must be unique in Azure.",
-        "placeholder": "accessreview-contoso",
-        "constraints": {
-          "required": true,
-          "validations": [
-            {
-              "regex": "^[a-z0-9][a-z0-9-]{0,56}[a-z0-9]$",
-              "message": "2-58 characters: lower-case letters, digits and hyphens. No hyphen at the start or the end."
+        "name": "app",
+        "type": "Microsoft.Common.Section",
+        "label": "Web app",
+        "elements": [
+          {
+            "name": "appName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "App name",
+            "toolTip": "Name of the web app. The portal address is https://<App name>.azurewebsites.net. Must be unique in Azure.",
+            "placeholder": "accessreview-contoso",
+            "constraints": {
+              "required": true,
+              "validations": [
+                {
+                  "regex": "^[a-z0-9][a-z0-9-]{0,56}[a-z0-9]$",
+                  "message": "2-58 characters: lower-case letters, digits and hyphens. No hyphen at the start or the end."
+                }
+              ]
             }
-          ]
-        }
-      },
-      {
-        "name": "nameApi",
-        "type": "Microsoft.Solutions.ArmApiControl",
-        "request": {
-          "method": "POST",
-          "path": "[concat(subscription().id, '/providers/Microsoft.Web/checknameavailability?api-version=2024-04-01')]",
-          "body": {
-            "name": "[basics('appName')]",
-            "type": "Microsoft.Web/sites"
+          },
+          {
+            "name": "nameApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "POST",
+              "path": "[concat(subscription().id, '/providers/Microsoft.Web/checknameavailability?api-version=2024-04-01')]",
+              "body": {
+                "name": "[basics('app').appName]",
+                "type": "Microsoft.Web/sites"
+              }
+            }
+          },
+          {
+            "name": "nameTaken",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "[concat('This name is already in use: ', basics('app').nameApi.message, ' If it is your own web app from an earlier attempt of this deployment, continue: the deployment updates it. Otherwise choose another name.')]"
+            },
+            "visible": "[and(not(empty(basics('app').appName)), equals(basics('app').nameApi.nameAvailable, false), equals(basics('app').nameApi.reason, 'AlreadyExists'))]"
+          },
+          {
+            "name": "appServicePlanSku",
+            "type": "Microsoft.Common.DropDown",
+            "label": "App Service plan size",
+            "toolTip": "P0v3 is enough for most tenants. See docs/SIZING.md.",
+            "defaultValue": "P0v3 (1 vCPU, 4 GB)",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "B1 (1 vCPU, 1.75 GB)",
+                  "value": "B1"
+                },
+                {
+                  "label": "B2 (2 vCPU, 3.5 GB)",
+                  "value": "B2"
+                },
+                {
+                  "label": "P0v3 (1 vCPU, 4 GB)",
+                  "value": "P0v3"
+                },
+                {
+                  "label": "P1v3 (2 vCPU, 8 GB)",
+                  "value": "P1v3"
+                },
+                {
+                  "label": "P2v3 (4 vCPU, 16 GB)",
+                  "value": "P2v3"
+                },
+                {
+                  "label": "P1mv3 (2 vCPU, 16 GB)",
+                  "value": "P1mv3"
+                }
+              ]
+            }
+          },
+          {
+            "name": "zoneRedundant",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Zone redundancy",
+            "defaultValue": "Off (1 instance)",
+            "toolTip": "On: two instances of the web app in different availability zones. Azure chooses the zones; App Service has no setting for them. Needs a Premium plan and a region with availability zones. Decide before the first deployment: an existing plan cannot always be changed later.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Off (1 instance)",
+                  "value": false
+                },
+                {
+                  "label": "On (2 instances in different zones)",
+                  "value": true
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "locationsApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(subscription().id, '/locations?api-version=2022-12-01')]"
+            }
+          },
+          {
+            "name": "zoneRedundantPlan",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "Zone redundancy needs a Premium plan (P0v3 or larger). Choose a P plan size."
+            },
+            "visible": "[and(basics('app').zoneRedundant, not(contains(basics('app').appServicePlanSku, 'P')))]"
+          },
+          {
+            "name": "zoneRedundantRegion",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "This region has no availability zones. Choose Off, or another region."
+            },
+            "visible": "[and(basics('app').zoneRedundant, not(empty(filter(coalesce(basics('app').locationsApi.value, parse('[]')), (l) => and(equals(l.name, location()), empty(coalesce(l.availabilityZoneMappings, parse('[]'))))))))]"
+          },
+          {
+            "name": "clientId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Client ID",
+            "toolTip": "Application (client) ID of the app registration of the portal.",
+            "constraints": {
+              "required": true,
+              "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "validationMessage": "Enter the GUID of the application (client) ID."
+            }
+          },
+          {
+            "name": "clientSecret",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Client secret",
+              "confirmPassword": "Confirm client secret"
+            },
+            "toolTip": "Value of a client secret of the app registration. The template stores it in Key Vault.",
+            "constraints": {
+              "required": true
+            },
+            "options": {
+              "hideConfirmation": true
+            }
           }
-        }
+        ]
       },
-      {
-        "name": "nameTaken",
-        "type": "Microsoft.Common.InfoBox",
-        "options": {
-          "style": "Warning",
-          "text": "[concat('This name is already in use: ', basics('nameApi').message, ' If it is your own web app from an earlier attempt of this deployment, continue: the deployment updates it. Otherwise choose another name.')]"
-        },
-        "visible": "[and(not(empty(basics('appName'))), equals(basics('nameApi').nameAvailable, false), equals(basics('nameApi').reason, 'AlreadyExists'))]"
-      },
-      {
-        "name": "appServicePlanSku",
-        "type": "Microsoft.Common.DropDown",
-        "label": "App Service plan size",
-        "toolTip": "P0v3 is enough for most tenants. See docs/SIZING.md.",
-        "defaultValue": "P0v3 (1 vCPU, 4 GB)",
-        "constraints": {
-          "required": true,
-          "allowedValues": [
-            {
-              "label": "B1 (1 vCPU, 1.75 GB)",
-              "value": "B1"
-            },
-            {
-              "label": "B2 (2 vCPU, 3.5 GB)",
-              "value": "B2"
-            },
-            {
-              "label": "P0v3 (1 vCPU, 4 GB)",
-              "value": "P0v3"
-            },
-            {
-              "label": "P1v3 (2 vCPU, 8 GB)",
-              "value": "P1v3"
-            },
-            {
-              "label": "P2v3 (4 vCPU, 16 GB)",
-              "value": "P2v3"
-            },
-            {
-              "label": "P1mv3 (2 vCPU, 16 GB)",
-              "value": "P1mv3"
-            }
-          ]
-        }
-      },
-      {
-        "name": "zoneRedundant",
-        "type": "Microsoft.Common.OptionsGroup",
-        "label": "Zone redundancy",
-        "defaultValue": "Off (1 instance)",
-        "toolTip": "On: two instances of the web app in different availability zones. Needs a Premium plan and a region with availability zones. Decide before the first deployment: an existing plan cannot always be changed later.",
-        "constraints": {
-          "allowedValues": [
-            {
-              "label": "Off (1 instance)",
-              "value": false
-            },
-            {
-              "label": "On (2 instances in different zones)",
-              "value": true
-            }
-          ],
-          "required": true
-        }
-      },
-      {
-        "name": "locationsApi",
-        "type": "Microsoft.Solutions.ArmApiControl",
-        "request": {
-          "method": "GET",
-          "path": "[concat(subscription().id, '/locations?api-version=2022-12-01')]"
-        }
-      },
-      {
-        "name": "zoneRedundantPlan",
-        "type": "Microsoft.Common.InfoBox",
-        "options": {
-          "style": "Error",
-          "text": "Zone redundancy needs a Premium plan (P0v3 or larger). Choose a P plan size."
-        },
-        "visible": "[and(basics('zoneRedundant'), not(contains(basics('appServicePlanSku'), 'P')))]"
-      },
-      {
-        "name": "zoneRedundantRegion",
-        "type": "Microsoft.Common.InfoBox",
-        "options": {
-          "style": "Error",
-          "text": "This region has no availability zones. Choose Off, or another region."
-        },
-        "visible": "[and(basics('zoneRedundant'), not(empty(filter(coalesce(basics('locationsApi').value, parse('[]')), (l) => equals(l.name, location())))), empty(first(map(filter(coalesce(basics('locationsApi').value, parse('[]')), (l) => equals(l.name, location())), (l) => coalesce(l.availabilityZoneMappings, parse('[]'))))))]"
-      },
-      {
-        "name": "clientId",
-        "type": "Microsoft.Common.TextBox",
-        "label": "Client ID",
-        "toolTip": "Application (client) ID of the app registration of the portal.",
-        "constraints": {
-          "required": true,
-          "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-          "validationMessage": "Enter the GUID of the application (client) ID."
-        }
-      },
-      {
-        "name": "clientSecret",
-        "type": "Microsoft.Common.PasswordBox",
-        "label": {
-          "password": "Client secret",
-          "confirmPassword": "Confirm client secret"
-        },
-        "toolTip": "Value of a client secret of the app registration. The template stores it in Key Vault.",
-        "constraints": {
-          "required": true
-        },
-        "options": {
-          "hideConfirmation": true
-        }
-      }
-    ],
-    "steps": [
       {
         "name": "database",
+        "type": "Microsoft.Common.Section",
         "label": "Database",
         "elements": [
           {
@@ -291,9 +297,9 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "The server has no public access. The template creates its private endpoint pe-<server name> in the private endpoint subnet (Basics tab) and the DNS record in the zone privatelink.postgres.database.azure.com (DNS zones tab)."
+              "text": "The server has no public access. The template creates its private endpoint pe-<server name> in the private endpoint subnet (Network section) and the DNS record in the zone privatelink.postgres.database.azure.com (Private DNS zones section)."
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "databaseAuthentication",
@@ -314,7 +320,7 @@
               ],
               "required": true
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "postgresAdminPassword",
@@ -332,7 +338,7 @@
             "options": {
               "hideConfirmation": false
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(steps('database').databaseAuthentication, 'Password'))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').databaseAuthentication, 'Password'))]"
           },
           {
             "name": "postgresServerName",
@@ -345,7 +351,7 @@
               "regex": "^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$",
               "validationMessage": "3-63 characters: lower-case letters, digits and hyphens."
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "postgresSize",
@@ -378,7 +384,7 @@
                 }
               ]
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "highAvailability",
@@ -403,7 +409,83 @@
               ],
               "required": true
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
+          },
+          {
+            "name": "availabilityZone",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Availability zone",
+            "defaultValue": "No preference",
+            "toolTip": "Zone of the PostgreSQL server. No preference: Azure chooses. Azure uses the zone only when it creates the server. A later deployment with another zone does not move the server.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "No preference",
+                  "value": "none"
+                },
+                {
+                  "label": "Zone 1",
+                  "value": "1"
+                },
+                {
+                  "label": "Zone 2",
+                  "value": "2"
+                },
+                {
+                  "label": "Zone 3",
+                  "value": "3"
+                }
+              ]
+            },
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
+          },
+          {
+            "name": "standbyZone",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Standby availability zone",
+            "defaultValue": "No preference",
+            "toolTip": "Zone of the standby server, another zone than the server. No preference: Azure chooses.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "No preference",
+                  "value": "none"
+                },
+                {
+                  "label": "Zone 1",
+                  "value": "1"
+                },
+                {
+                  "label": "Zone 2",
+                  "value": "2"
+                },
+                {
+                  "label": "Zone 3",
+                  "value": "3"
+                }
+              ]
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').highAvailability, 'ZoneRedundant'))]"
+          },
+          {
+            "name": "zoneSame",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "The standby server must be in another zone than the server. Choose another standby zone, or No preference."
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').highAvailability, 'ZoneRedundant'), not(equals(basics('database').standbyZone, 'none')), equals(basics('database').standbyZone, basics('database').availabilityZone))]"
+          },
+          {
+            "name": "zoneRegion",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "This region has no availability zones. Choose No preference for the zones."
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), or(not(equals(basics('database').availabilityZone, 'none')), and(equals(basics('database').highAvailability, 'ZoneRedundant'), not(equals(basics('database').standbyZone, 'none')))), not(empty(filter(coalesce(basics('app').locationsApi.value, parse('[]')), (l) => and(equals(l.name, location()), empty(coalesce(l.availabilityZoneMappings, parse('[]'))))))))]"
           },
           {
             "name": "capabilitiesApi",
@@ -426,9 +508,9 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "[concat('vCore quota of your subscription in this region: ', string(first(map(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))), (u) => sub(u.limit, u.currentValue)))), ' free for this size family, ', string(first(map(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')), (u) => sub(u.limit, u.currentValue)))), ' free in total. This server needs ', string(mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))), ' (a standby with high availability counts double).')]"
+              "text": "[concat('vCore quota of your subscription in this region: ', string(first(map(filter(coalesce(basics('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(basics('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(basics('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(basics('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))), (u) => sub(u.limit, u.currentValue)))), ' free for this size family, ', string(first(map(filter(coalesce(basics('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')), (u) => sub(u.limit, u.currentValue)))), ' free in total. This server needs ', string(mul(if(contains(basics('database').postgresSize, 'D4'), 4, 2), if(equals(basics('database').highAvailability, 'Disabled'), 1, 2))), ' (a standby with high availability counts double).')]"
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(basics('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(basics('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(basics('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(basics('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), not(empty(filter(coalesce(basics('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))))]"
           },
           {
             "name": "check1",
@@ -437,7 +519,7 @@
               "style": "Error",
               "text": "PostgreSQL Flexible Server is restricted in this region for your subscription. Choose another region, or ask Azure support to enable the region."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').capabilitiesApi.value, parse('[]')), (c) => equals(c.restricted, 'Enabled')))))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(basics('database').capabilitiesApi.value, parse('[]')), (c) => equals(c.restricted, 'Enabled')))))]"
           },
           {
             "name": "check2",
@@ -446,7 +528,7 @@
               "style": "Error",
               "text": "This size is not offered in this region. Choose another size."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(coalesce(steps('database').capabilitiesApi.value, parse('[]')))), not(contains(string(coalesce(steps('database').capabilitiesApi.value, parse('[]'))), concat('\"', steps('database').postgresSize, '\"')))))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(coalesce(basics('database').capabilitiesApi.value, parse('[]')))), not(contains(string(coalesce(basics('database').capabilitiesApi.value, parse('[]'))), concat('\"', basics('database').postgresSize, '\"')))))]"
           },
           {
             "name": "check3",
@@ -455,7 +537,7 @@
               "style": "Error",
               "text": "High availability is not possible with Burstable sizes. Choose a General Purpose size, or turn high availability off."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(equals(steps('database').highAvailability, 'Disabled')), contains(steps('database').postgresSize, 'Standard_B')))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), and(not(equals(basics('database').highAvailability, 'Disabled')), contains(basics('database').postgresSize, 'Standard_B')))]"
           },
           {
             "name": "check4",
@@ -464,7 +546,7 @@
               "style": "Error",
               "text": "Zone-redundant high availability is not supported in this region. Choose Same zone or Disabled."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(equals(steps('database').highAvailability, 'ZoneRedundant'), not(empty(filter(coalesce(steps('database').capabilitiesApi.value, parse('[]')), (c) => equals(c.zoneRedundantHaSupported, 'Disabled'))))))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), and(equals(basics('database').highAvailability, 'ZoneRedundant'), not(empty(filter(coalesce(basics('database').capabilitiesApi.value, parse('[]')), (c) => equals(c.zoneRedundantHaSupported, 'Disabled'))))))]"
           },
           {
             "name": "check5",
@@ -473,7 +555,7 @@
               "style": "Error",
               "text": "Not enough vCore quota for this size family in this region (see the quota line above). Choose another size family, or ask for more quota (Help + support > Service and subscription limits)."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => and(equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))), less(sub(u.limit, u.currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))))))))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(basics('database').usagesApi.value, parse('[]')), (u) => and(equals(u.name.value, if(contains(basics('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(basics('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(basics('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))), less(sub(u.limit, u.currentValue), mul(if(contains(basics('database').postgresSize, 'D4'), 4, 2), if(equals(basics('database').highAvailability, 'Disabled'), 1, 2))))))))]"
           },
           {
             "name": "check6",
@@ -482,7 +564,7 @@
               "style": "Error",
               "text": "Not enough total PostgreSQL vCore quota in this region (see the quota line above). Ask for more quota, or choose a smaller size."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => and(equals(u.name.value, 'cores'), less(sub(u.limit, u.currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))))))))]"
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(basics('database').usagesApi.value, parse('[]')), (u) => and(equals(u.name.value, 'cores'), less(sub(u.limit, u.currentValue), mul(if(contains(basics('database').postgresSize, 'D4'), 4, 2), if(equals(basics('database').highAvailability, 'Disabled'), 1, 2))))))))]"
           },
           {
             "name": "createOrderInfo",
@@ -491,7 +573,7 @@
               "style": "Info",
               "text": "The red messages above come from the PostgreSQL offer and the vCore quota of your subscription in this region. Some limits are visible only when Azure creates the server (error SkuNotAvailable). The template creates PostgreSQL first: then the deployment stops after about two minutes, before it creates anything else. Choose another size and deploy again with the same values."
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "postgresStorageSizeGB",
@@ -520,7 +602,7 @@
                 }
               ]
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "postgresVersion",
@@ -544,7 +626,7 @@
                 }
               ]
             },
-            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+            "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "ownServerInfo",
@@ -553,7 +635,7 @@
               "style": "Info",
               "text": "Prepare your server first: a login that owns the database accessreview, TLS, a pg_hba.conf line for the address range of the App Service subnet, and port 5432 open from this subnet."
             },
-            "visible": "[equals(steps('database').databaseServer, 'ExistingServer')]"
+            "visible": "[equals(basics('database').databaseServer, 'ExistingServer')]"
           },
           {
             "name": "existingServerConnectionString",
@@ -571,7 +653,7 @@
             "options": {
               "hideConfirmation": true
             },
-            "visible": "[equals(steps('database').databaseServer, 'ExistingServer')]"
+            "visible": "[equals(basics('database').databaseServer, 'ExistingServer')]"
           },
           {
             "name": "existingServerCaCertificate",
@@ -582,18 +664,19 @@
             "constraints": {
               "required": false
             },
-            "visible": "[equals(steps('database').databaseServer, 'ExistingServer')]"
+            "visible": "[equals(basics('database').databaseServer, 'ExistingServer')]"
           }
         ]
       },
       {
         "name": "dns",
-        "label": "DNS zones",
+        "type": "Microsoft.Common.Section",
+        "label": "Private DNS zones",
         "elements": [
           {
             "name": "dnsMode",
             "type": "Microsoft.Common.OptionsGroup",
-            "label": "Private DNS zones",
+            "label": "Zones",
             "defaultValue": "Create new zones",
             "toolTip": "New zones: the template creates privatelink.azurewebsites.net, privatelink.postgres.database.azure.com and privatelink.vaultcore.azure.net in the resource group and links them to the virtual network. Existing zones: your central zones, for example in a hub subscription.",
             "constraints": {
@@ -617,7 +700,7 @@
               "style": "Warning",
               "text": "[concat('This virtual network uses custom DNS servers (', string(basics('network').vnetApi.properties.dhcpOptions.dnsServers), '). New zones in this resource group are linked only to this virtual network, so these DNS servers do not see them. Use the existing zones that your DNS servers resolve.')]"
             },
-            "visible": "[and(equals(steps('dns').dnsMode, 'new'), not(empty(basics('network').vnetApi.properties.dhcpOptions.dnsServers)))]"
+            "visible": "[and(equals(basics('dns').dnsMode, 'new'), not(empty(basics('network').vnetApi.properties.dhcpOptions.dnsServers)))]"
           },
           {
             "name": "newZonesInfo",
@@ -626,7 +709,7 @@
               "style": "Info",
               "text": "Users open the portal from your network. Your DNS must resolve <App name>.azurewebsites.net to the private endpoint, for example with a conditional forwarder for privatelink.azurewebsites.net to an Azure DNS resolver."
             },
-            "visible": "[equals(steps('dns').dnsMode, 'new')]"
+            "visible": "[equals(basics('dns').dnsMode, 'new')]"
           },
           {
             "name": "zonesApi",
@@ -647,9 +730,9 @@
             "filter": true,
             "constraints": {
               "required": true,
-              "allowedValues": "[map(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
+              "allowedValues": "[map(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
             },
-            "visible": "[equals(steps('dns').dnsMode, 'existing')]"
+            "visible": "[equals(basics('dns').dnsMode, 'existing')]"
           },
           {
             "name": "siteZoneNone",
@@ -658,7 +741,7 @@
               "style": "Warning",
               "text": "No zone privatelink.azurewebsites.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
             },
-            "visible": "[and(equals(steps('dns').dnsMode, 'existing'), not(empty(steps('dns').zonesApi)), empty(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net'))))]"
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), not(empty(basics('dns').zonesApi)), empty(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net'))))]"
           },
           {
             "name": "postgresZone",
@@ -668,9 +751,9 @@
             "filter": true,
             "constraints": {
               "required": true,
-              "allowedValues": "[map(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
+              "allowedValues": "[map(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
             },
-            "visible": "[and(equals(steps('dns').dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL'))]"
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), equals(basics('database').databaseServer, 'AzurePostgreSQL'))]"
           },
           {
             "name": "postgresZoneNone",
@@ -679,7 +762,7 @@
               "style": "Warning",
               "text": "No zone privatelink.postgres.database.azure.com found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
             },
-            "visible": "[and(and(equals(steps('dns').dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), not(empty(steps('dns').zonesApi)), empty(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com'))))]"
+            "visible": "[and(and(equals(basics('dns').dnsMode, 'existing'), equals(basics('database').databaseServer, 'AzurePostgreSQL')), not(empty(basics('dns').zonesApi)), empty(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com'))))]"
           },
           {
             "name": "vaultZone",
@@ -689,9 +772,9 @@
             "filter": true,
             "constraints": {
               "required": true,
-              "allowedValues": "[map(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
+              "allowedValues": "[map(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
             },
-            "visible": "[equals(steps('dns').dnsMode, 'existing')]"
+            "visible": "[equals(basics('dns').dnsMode, 'existing')]"
           },
           {
             "name": "vaultZoneNone",
@@ -700,12 +783,13 @@
               "style": "Warning",
               "text": "No zone privatelink.vaultcore.azure.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
             },
-            "visible": "[and(equals(steps('dns').dnsMode, 'existing'), not(empty(steps('dns').zonesApi)), empty(filter(coalesce(steps('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
+            "visible": "[and(equals(basics('dns').dnsMode, 'existing'), not(empty(basics('dns').zonesApi)), empty(filter(coalesce(basics('dns').zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
           }
         ]
       },
       {
         "name": "keyVault",
+        "type": "Microsoft.Common.Section",
         "label": "Key Vault",
         "elements": [
           {
@@ -721,7 +805,7 @@
             "type": "Microsoft.Common.OptionsGroup",
             "label": "Network access",
             "defaultValue": "Private endpoint only (public network access disabled)",
-            "toolTip": "The Key Vault gets a private endpoint in the private endpoint subnet (Basics tab) and its DNS record in the zone privatelink.vaultcore.azure.net (DNS zones tab). Public network access is disabled, with no exceptions.",
+            "toolTip": "The Key Vault gets a private endpoint in the private endpoint subnet (Network section) and its DNS record in the zone privatelink.vaultcore.azure.net (Private DNS zones section). Public network access is disabled, with no exceptions.",
             "constraints": {
               "allowedValues": [
                 {
@@ -764,13 +848,13 @@
             "name": "resourceGroup",
             "type": "Microsoft.Common.DropDown",
             "label": "Key Vault resource group",
-            "toolTip": "An existing resource group in the subscription of the Basics tab.",
+            "toolTip": "An existing resource group in the subscription chosen above.",
             "filter": true,
             "constraints": {
               "required": true,
-              "allowedValues": "[map(coalesce(steps('keyVault').resourceGroupsApi.value, parse('[]')), (g) => parse(concat('{\"label\":\"', g.name, '\",\"value\":\"', g.name, '\"}')))]"
+              "allowedValues": "[map(coalesce(basics('keyVault').resourceGroupsApi.value, parse('[]')), (g) => parse(concat('{\"label\":\"', g.name, '\",\"value\":\"', g.name, '\"}')))]"
             },
-            "visible": "[equals(steps('keyVault').resourceGroupMode, 'other')]"
+            "visible": "[equals(basics('keyVault').resourceGroupMode, 'other')]"
           },
           {
             "name": "resourceGroupInfo",
@@ -779,7 +863,7 @@
               "style": "Info",
               "text": "You need Contributor and Role Based Access Control Administrator on this resource group too."
             },
-            "visible": "[equals(steps('keyVault').resourceGroupMode, 'other')]"
+            "visible": "[equals(basics('keyVault').resourceGroupMode, 'other')]"
           },
           {
             "name": "keyVaultName",
@@ -803,31 +887,34 @@
         ]
       }
     ],
+    "steps": [],
     "outputs": {
       "location": "[location()]",
-      "appName": "[basics('appName')]",
-      "appServicePlanSku": "[basics('appServicePlanSku')]",
-      "clientId": "[basics('clientId')]",
-      "clientSecret": "[basics('clientSecret')]",
+      "appName": "[basics('app').appName]",
+      "appServicePlanSku": "[basics('app').appServicePlanSku]",
+      "clientId": "[basics('app').clientId]",
+      "clientSecret": "[basics('app').clientSecret]",
       "appSubnetResourceId": "[basics('network').appSubnet]",
       "privateEndpointSubnetResourceId": "[basics('network').endpointSubnet]",
-      "webAppPrivateDnsZoneResourceId": "[if(equals(steps('dns').dnsMode, 'existing'), steps('dns').siteZone, '')]",
-      "postgresPrivateDnsZoneResourceId": "[if(and(equals(steps('dns').dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), steps('dns').postgresZone, '')]",
-      "keyVaultPrivateDnsZoneResourceId": "[if(equals(steps('dns').dnsMode, 'existing'), steps('dns').vaultZone, '')]",
-      "databaseServer": "[steps('database').databaseServer]",
-      "databaseAuthentication": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), steps('database').databaseAuthentication, 'ManagedIdentity')]",
-      "postgresAdminPassword": "[if(and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(steps('database').databaseAuthentication, 'Password')), steps('database').postgresAdminPassword, '')]",
-      "postgresServerName": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), coalesce(steps('database').postgresServerName, ''), '')]",
-      "postgresSkuName": "[steps('database').postgresSize]",
-      "postgresStorageSizeGB": "[steps('database').postgresStorageSizeGB]",
-      "postgresVersion": "[steps('database').postgresVersion]",
-      "existingServerConnectionString": "[if(equals(steps('database').databaseServer, 'ExistingServer'), steps('database').existingServerConnectionString, '')]",
-      "existingServerCaCertificate": "[if(equals(steps('database').databaseServer, 'ExistingServer'), coalesce(steps('database').existingServerCaCertificate, ''), '')]",
-      "keyVaultName": "[coalesce(steps('keyVault').keyVaultName, '')]",
-      "enablePurgeProtection": "[steps('keyVault').enablePurgeProtection]",
-      "keyVaultResourceGroup": "[if(equals(steps('keyVault').resourceGroupMode, 'other'), steps('keyVault').resourceGroup, '')]",
-      "appServiceZoneRedundant": "[basics('zoneRedundant')]",
-      "postgresHighAvailability": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), steps('database').highAvailability, 'Disabled')]"
+      "webAppPrivateDnsZoneResourceId": "[if(equals(basics('dns').dnsMode, 'existing'), basics('dns').siteZone, '')]",
+      "postgresPrivateDnsZoneResourceId": "[if(and(equals(basics('dns').dnsMode, 'existing'), equals(basics('database').databaseServer, 'AzurePostgreSQL')), basics('dns').postgresZone, '')]",
+      "keyVaultPrivateDnsZoneResourceId": "[if(equals(basics('dns').dnsMode, 'existing'), basics('dns').vaultZone, '')]",
+      "databaseServer": "[basics('database').databaseServer]",
+      "databaseAuthentication": "[if(equals(basics('database').databaseServer, 'AzurePostgreSQL'), basics('database').databaseAuthentication, 'ManagedIdentity')]",
+      "postgresAdminPassword": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').databaseAuthentication, 'Password')), basics('database').postgresAdminPassword, '')]",
+      "postgresServerName": "[if(equals(basics('database').databaseServer, 'AzurePostgreSQL'), coalesce(basics('database').postgresServerName, ''), '')]",
+      "postgresSkuName": "[basics('database').postgresSize]",
+      "postgresStorageSizeGB": "[basics('database').postgresStorageSizeGB]",
+      "postgresVersion": "[basics('database').postgresVersion]",
+      "existingServerConnectionString": "[if(equals(basics('database').databaseServer, 'ExistingServer'), basics('database').existingServerConnectionString, '')]",
+      "existingServerCaCertificate": "[if(equals(basics('database').databaseServer, 'ExistingServer'), coalesce(basics('database').existingServerCaCertificate, ''), '')]",
+      "keyVaultName": "[coalesce(basics('keyVault').keyVaultName, '')]",
+      "enablePurgeProtection": "[basics('keyVault').enablePurgeProtection]",
+      "keyVaultResourceGroup": "[if(equals(basics('keyVault').resourceGroupMode, 'other'), basics('keyVault').resourceGroup, '')]",
+      "appServiceZoneRedundant": "[basics('app').zoneRedundant]",
+      "postgresHighAvailability": "[if(equals(basics('database').databaseServer, 'AzurePostgreSQL'), basics('database').highAvailability, 'Disabled')]",
+      "postgresAvailabilityZone": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(equals(basics('database').availabilityZone, 'none'))), basics('database').availabilityZone, '')]",
+      "postgresStandbyAvailabilityZone": "[if(and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), equals(basics('database').highAvailability, 'ZoneRedundant'), not(equals(basics('database').standbyZone, 'none'))), basics('database').standbyZone, '')]"
     }
   }
 }
