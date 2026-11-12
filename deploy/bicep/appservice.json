@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
-      "templateHash": "9463477132444913749"
+      "version": "0.49.2.45890",
+      "templateHash": "12183715941349407700"
     }
   },
   "parameters": {
@@ -645,8 +645,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "13444219598018421596"
+              "version": "0.49.2.45890",
+              "templateHash": "9572168885646323423"
             }
           },
           "parameters": {
@@ -757,6 +757,13 @@
                 "description": "Public access: allow connections from Azure services (App Service, Container Apps without VNet integration)."
               }
             },
+            "publicNetworkAccess": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Without a delegated subnet: false = no public endpoint and no firewall rules, for a server that you reach through a private endpoint."
+              }
+            },
             "delegatedSubnetResourceId": {
               "type": "string",
               "defaultValue": "",
@@ -787,6 +794,7 @@
           },
           "variables": {
             "privateAccess": "[not(empty(parameters('delegatedSubnetResourceId')))]",
+            "firewallRules": "[and(not(variables('privateAccess')), parameters('publicNetworkAccess'))]",
             "entraAuth": "[or(parameters('enableEntraAuth'), not(parameters('passwordAuth')))]",
             "serverParameters": {
               "work_mem": "16384",
@@ -826,7 +834,7 @@
                 "highAvailability": {
                   "mode": "[parameters('highAvailability')]"
                 },
-                "network": "[if(variables('privateAccess'), createObject('delegatedSubnetResourceId', parameters('delegatedSubnetResourceId'), 'privateDnsZoneArmResourceId', parameters('privateDnsZoneArmResourceId'), 'publicNetworkAccess', 'Disabled'), createObject('publicNetworkAccess', 'Enabled'))]",
+                "network": "[if(variables('privateAccess'), createObject('delegatedSubnetResourceId', parameters('delegatedSubnetResourceId'), 'privateDnsZoneArmResourceId', parameters('privateDnsZoneArmResourceId'), 'publicNetworkAccess', 'Disabled'), createObject('publicNetworkAccess', if(parameters('publicNetworkAccess'), 'Enabled', 'Disabled')))]",
                 "authConfig": {
                   "activeDirectoryAuth": "[if(variables('entraAuth'), 'Enabled', 'Disabled')]",
                   "passwordAuth": "[if(parameters('passwordAuth'), 'Enabled', 'Disabled')]",
@@ -886,7 +894,7 @@
               ]
             },
             {
-              "condition": "[and(not(variables('privateAccess')), parameters('allowAzureServices'))]",
+              "condition": "[and(variables('firewallRules'), parameters('allowAzureServices'))]",
               "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
               "apiVersion": "2025-08-01",
               "name": "[format('{0}/{1}', parameters('serverName'), 'AllowAzureServices')]",
@@ -901,14 +909,14 @@
             {
               "copy": {
                 "name": "clientRules",
-                "count": "[length(if(variables('privateAccess'), createArray(), parameters('allowedIpRanges')))]"
+                "count": "[length(if(variables('firewallRules'), parameters('allowedIpRanges'), createArray()))]"
               },
               "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
               "apiVersion": "2025-08-01",
               "name": "[format('{0}/{1}', parameters('serverName'), format('client-{0}', copyIndex()))]",
               "properties": {
-                "startIpAddress": "[if(variables('privateAccess'), createArray(), parameters('allowedIpRanges'))[copyIndex()].start]",
-                "endIpAddress": "[if(variables('privateAccess'), createArray(), parameters('allowedIpRanges'))[copyIndex()].end]"
+                "startIpAddress": "[if(variables('firewallRules'), parameters('allowedIpRanges'), createArray())[copyIndex()].start]",
+                "endIpAddress": "[if(variables('firewallRules'), parameters('allowedIpRanges'), createArray())[copyIndex()].end]"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
@@ -916,6 +924,10 @@
             }
           ],
           "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
+            },
             "fqdn": {
               "type": "string",
               "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName')), '2025-08-01').fullyQualifiedDomainName]"

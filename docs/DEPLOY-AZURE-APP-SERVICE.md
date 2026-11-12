@@ -54,6 +54,8 @@ Sizes for larger tenants: [SIZING.md](SIZING.md).
 
 In both options the portal address is `https://<app-name>.azurewebsites.net` and the sign-in page is public. Only users with a portal role can open the portal.
 
+When the portal must be reachable only from your network, use the second template `deploy/bicep/appservice-existing-network.bicep` ([option D](#option-d-your-existing-network-private-endpoints-only)). It uses your existing virtual network. The web app, PostgreSQL and Key Vault get private endpoints and have no public access.
+
 ## 2. Before you start
 
 ### Rights
@@ -235,6 +237,56 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
 - `Ssl Mode=VerifyFull` checks the certificate of the server and its name: `Host` must be a name or IP address in the certificate. `Ssl Mode=Require` encrypts the connection but does not check the certificate.
 - The CA certificate becomes the app setting `Database__RootCertificate`. You can change it later in **Environment variables** of the web app.
 
+### Option D: your existing network, private endpoints only
+
+Use this option when the portal must be reachable only from your network. The template `deploy/bicep/appservice-existing-network.bicep` uses your existing virtual network. It creates no virtual network and no subnets.
+
+| | What the template creates |
+|---|---|
+| Web app | Private endpoint, public network access disabled. VNet integration: all outbound traffic goes through your network. |
+| PostgreSQL | Azure Database for PostgreSQL Flexible Server with a private endpoint, public network access disabled. Or your own server (option C). |
+| Key Vault | Private endpoint, public network access disabled. It keeps the client secret and the connection string. |
+| Subnets (existing) | **App Service subnet**: only for App Service and delegated to `Microsoft.Web/serverFarms` before the deployment (the template does not change your subnets), `/28` or larger, `/26` recommended. **Private endpoint subnet**: the three private endpoints. Both in the region of the deployment. |
+| Private DNS zones | `privatelink.azurewebsites.net`, `privatelink.postgres.database.azure.com`, `privatelink.vaultcore.azure.net`: your existing zones, or new zones in the resource group, linked to the virtual network of the App Service subnet. |
+
+Agree with your network team before you deploy:
+
+- Users open `https://<app-name>.azurewebsites.net` from your network. Your DNS must resolve `<app-name>.azurewebsites.net` and `<app-name>.scm.azurewebsites.net` to the private endpoint, for example with a conditional forwarder for `privatelink.azurewebsites.net` to an Azure DNS Private Resolver. Sign-in still goes to `login.microsoftonline.com`.
+- If the virtual network uses custom DNS servers, use the existing zones that these servers resolve. New zones are linked only to the virtual network of the App Service subnet.
+- All outbound traffic of the web app goes through your network. Allow `login.microsoftonline.com`, `graph.microsoft.com` and `management.azure.com` from the App Service subnet.
+- Deploy the code (Step 5) from a computer or a runner in your network: the deployment address `<app-name>.scm.azurewebsites.net` has no public access either.
+
+**Azure portal.** Open this link. The form lists the virtual networks in the region that you choose, their suitable subnets, and your private DNS zones:
+
+```text
+https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.createUiDefinition.json
+```
+
+The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`.
+
+**Commands.** Find the resource ids of the subnets:
+
+```powershell
+az network vnet subnet list --resource-group <network resource group> --vnet-name <virtual network> `
+    --query "[].{name:name, prefix:addressPrefix, delegation:delegations[0].serviceName, id:id}" -o table
+```
+
+```powershell
+$appSubnetId      = '<resource id of the App Service subnet>'
+$endpointSubnetId = '<resource id of the private endpoint subnet>'
+
+az deployment group create --resource-group $resourceGroup --name accessreview `
+    --template-file deploy/bicep/appservice-existing-network.bicep `
+    --parameters appName=$appName postgresServerName=$postgresName keyVaultName=$keyVaultName `
+                 appSubnetResourceId=$appSubnetId privateEndpointSubnetResourceId=$endpointSubnetId `
+                 clientId=$clientId clientSecret=$clientSecret
+```
+
+- Existing zones: add `webAppPrivateDnsZoneResourceId=<id> postgresPrivateDnsZoneResourceId=<id> keyVaultPrivateDnsZoneResourceId=<id>`.
+- Your own PostgreSQL server: add `databaseServer=ExistingServer existingServerConnectionString=$dbConnection` (option C).
+- The deployment stops before it creates anything if a subnet value is not a subnet resource id.
+- Delegate the App Service subnet first: `az network vnet subnet update --resource-group <network resource group> --vnet-name <virtual network> --name <subnet> --delegations Microsoft.Web/serverFarms`. Without the delegation the web app fails with "Subnet ... is missing a delegation to Microsoft.Web/serverFarms".
+
 ### For all options
 
 The deployment takes about 10 minutes for the quick start and a few minutes more for the private network option. PostgreSQL takes most of the time. With your own server (option C) it takes a few minutes.
@@ -271,6 +323,8 @@ Compress-Archive -Path artifacts/publish/* -DestinationPath artifacts/portal.zip
 az webapp deploy --resource-group $resourceGroup --name $appName --src-path artifacts/portal.zip --type zip --track-status false
 ```
 
+Option D: run `az webapp deploy` on a computer in your network that resolves `<app-name>.scm.azurewebsites.net` to the private endpoint (check with `nslookup`), or use GitHub Actions with a runner in your network.
+
 The folder `artifacts` is in `.gitignore`. The upload takes about one minute. `--track-status false` returns when the package is uploaded: on a new web app the status tracking of Azure CLI can wait 10 minutes and then report an error, although the portal starts normally. Step 6 checks the start instead.
 
 At the first start the portal creates the database schema (setting `Database__ApplyMigrationsOnStartup=true`). The first start takes one to two minutes.
@@ -287,7 +341,7 @@ for ($i = 0; $i -lt 30; $i++) {
 
 If there is no `ok` after five minutes, see [Troubleshooting](#troubleshooting).
 
-**Private network option only:** check that the web app can read both secrets from Key Vault. Both rows must show `Resolved`:
+**Private network option and option D:** check that the web app can read both secrets from Key Vault. Both rows must show `Resolved`:
 
 ```powershell
 $siteId = az webapp show --resource-group $resourceGroup --name $appName --query id -o tsv
@@ -448,6 +502,9 @@ If you used `-ManagementGroupId` or `-SubscriptionId` in step 3, delete the role
 | Your own server: "The remote certificate was rejected" or a name mismatch | The CA of the server certificate is missing (`existingServerCaCertificate`, app setting `Database__RootCertificate`), or `Host` in the connection string is not a name or IP address in the certificate. |
 | Managed identity: `role "id-<app-name>" does not exist` or a token error | The identity is not a Microsoft Entra administrator of the server, or `Database__ManagedIdentityClientId` is not the client ID of `id-<app-name>`. Check **Security > Authentication** of the server and run the template again. |
 | Private network: Key Vault reference status `AccessToKeyVaultDenied` | The web app cannot read Key Vault: no role, no network path, or the role is not active yet. Check the role `Key Vault Secrets User` of the identity `id-<app-name>` on the vault, and the private endpoint `pe-<vault name>`. Then restart the web app: `az webapp restart --resource-group $resourceGroup --name $appName`. If you changed the template to use a vault with public access, check that no policy set public network access to **Disabled** ([PERMISSIONS.md, section 5](PERMISSIONS.md#5-azure-policy)). |
+| Option D: `Subnet ... is missing a delegation to Microsoft.Web/serverFarms` | The App Service subnet is not delegated. Delegate it (command in [option D](#option-d-your-existing-network-private-endpoints-only)) and run the deployment again. |
+| Option D: the browser shows `403 - Forbidden` or `Ip Forbidden`, or `az webapp deploy` fails with 403 | The request came from the internet: the web app has no public access. Use a computer in your network. `nslookup <app-name>.azurewebsites.net` must return the private IP address of the private endpoint `pe-<app-name>`. |
+| Option D: deployment error "A virtual network cannot be linked to multiple zones with overlapping namespaces" | The virtual network is already linked to a zone with this name, for example a central `privatelink.*` zone. Choose **Use existing zones** in the portal form, or give the zone resource ids. |
 | Sign-in fails | `AADSTS50011`: the address is not a redirect URI; run `setup-sp.ps1 -PortalUrl https://$appName.azurewebsites.net -SkipSecret`. More errors: [PERMISSIONS.md, section 9](PERMISSIONS.md#9-errors-and-what-they-mean). |
 | Diagnostics: a Graph or Azure check fails | Admin consent or a role of the scanner is missing. Run `setup-sp.ps1` again. |
 | The scan runs for a long time | Large tenants and busy subscriptions. See [SIZING.md](SIZING.md). |

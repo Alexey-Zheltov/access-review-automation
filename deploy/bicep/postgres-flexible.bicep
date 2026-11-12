@@ -5,8 +5,9 @@
 //   az deployment group create -g <rg> -f deploy/bicep/postgres-flexible.bicep \
 //     -p serverName=<name> administratorLogin=<user> administratorPassword=<secret>
 //
-// Network: either public access with firewall rules (default) or private access in a delegated subnet
-// (set delegatedSubnetResourceId and privateDnsZoneArmResourceId).
+// Network: either public access with firewall rules (default), private access in a delegated subnet
+// (set delegatedSubnetResourceId and privateDnsZoneArmResourceId), or no public access for a server that you reach
+// through a private endpoint (publicNetworkAccess = false; create the private endpoint separately).
 // Sign-in: password (administratorLogin / administratorPassword) and/or Microsoft Entra ID. With passwordAuth = false the server
 // accepts only Microsoft Entra tokens; entraAdministrators sets who administers it (for example a managed identity).
 
@@ -55,6 +56,9 @@ param allowedIpRanges array = []
 @description('Public access: allow connections from Azure services (App Service, Container Apps without VNet integration).')
 param allowAzureServices bool = true
 
+@description('Without a delegated subnet: false = no public endpoint and no firewall rules, for a server that you reach through a private endpoint.')
+param publicNetworkAccess bool = true
+
 @description('Private access: resource id of a subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers. Empty = public access.')
 param delegatedSubnetResourceId string = ''
 
@@ -69,6 +73,7 @@ param tags object = {
 }
 
 var privateAccess = !empty(delegatedSubnetResourceId)
+var firewallRules = !privateAccess && publicNetworkAccess
 var entraAuth = enableEntraAuth || !passwordAuth
 
 // Server parameters for scan-heavy workloads: bulk inserts in chunks, large filtered queries, bulk deletes of old snapshots.
@@ -115,7 +120,7 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
           publicNetworkAccess: 'Disabled'
         }
       : {
-          publicNetworkAccess: 'Enabled'
+          publicNetworkAccess: publicNetworkAccess ? 'Enabled' : 'Disabled'
         }
     authConfig: {
       activeDirectoryAuth: entraAuth ? 'Enabled' : 'Disabled'
@@ -163,7 +168,7 @@ resource administrators 'Microsoft.DBforPostgreSQL/flexibleServers/administrator
   }
 ]
 
-resource azureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = if (!privateAccess && allowAzureServices) {
+resource azureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = if (firewallRules && allowAzureServices) {
   parent: server
   name: 'AllowAzureServices'
   properties: {
@@ -173,7 +178,7 @@ resource azureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@
 }
 
 resource clientRules 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = [
-  for (range, i) in (privateAccess ? [] : allowedIpRanges): {
+  for (range, i) in (firewallRules ? allowedIpRanges : []): {
     parent: server
     name: 'client-${i}'
     properties: {
@@ -183,6 +188,7 @@ resource clientRules 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@20
   }
 ]
 
+output id string = server.id
 output fqdn string = server.properties.fullyQualifiedDomainName
 output databaseName string = databaseName
 @description('Connection string for ConnectionStrings__DefaultConnection (add the password).')

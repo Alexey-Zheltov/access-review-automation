@@ -163,20 +163,22 @@ So check the scope and the condition of your role first, then ask for a change.
 
 With `privateNetwork=true` and the default values, the template creates the virtual network and the private DNS zones **in the resource group of the portal**. Contributor and Role Based Access Control Administrator on this resource group are enough.
 
-In many organizations the network is managed centrally: the virtual network is in another resource group, and the private DNS zones are in a hub subscription. Then you give existing subnets and zones to the template (`appSubnetResourceId`, `postgresSubnetResourceId`, `privateEndpointSubnetResourceId`, `postgresPrivateDnsZoneResourceId`, `keyVaultPrivateDnsZoneResourceId`), and you need rights **there** too:
+In many organizations the network is managed centrally: the virtual network is in another resource group, and the private DNS zones are in a hub subscription. Then you give existing subnets and zones to the template (`appSubnetResourceId`, `postgresSubnetResourceId`, `privateEndpointSubnetResourceId`, `postgresPrivateDnsZoneResourceId`, `keyVaultPrivateDnsZoneResourceId`), and you need rights **there** too. The template of option D (`appservice-existing-network.bicep`, private endpoints only) always uses existing subnets, and also `webAppPrivateDnsZoneResourceId`:
 
 | What the deployment does | Action | Role on that resource |
 |---|---|---|
 | Puts the web app, PostgreSQL and the private endpoint into existing subnets | `Microsoft.Network/virtualNetworks/subnets/join/action` | **Network Contributor** on the virtual network (or a custom role with this action) |
 | Links a new private DNS zone to the existing virtual network | `Microsoft.Network/virtualNetworks/join/action` | **Network Contributor** on the virtual network |
 | Adds the DNS record of the Key Vault private endpoint to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.vaultcore.azure.net` |
+| Option D: adds the DNS records of the web app private endpoint (`<app-name>` and `<app-name>.scm`) to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.azurewebsites.net` |
 | PostgreSQL adds its DNS record to an existing zone | write on the zone | **Private DNS Zone Contributor** on the PostgreSQL zone |
 
 Owner on the subscription of the portal does not give these rights when the network or the zones are in another subscription. The error is `LinkedAuthorizationFailed` (section 9). In this case the private endpoint itself is created, and only its DNS record fails.
 
 Before the session, agree with the network team:
 
-- the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger);
+- the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger). Option D needs two: the app subnet and the private endpoint subnet (three private endpoints);
+- option D: how users and the deployment computer resolve `<app-name>.azurewebsites.net` and `<app-name>.scm.azurewebsites.net` to the private endpoint (for example a conditional forwarder for `privatelink.azurewebsites.net`);
 - who adds the DNS records if you get no rights on the hub zones;
 - outbound internet access from the app subnet (firewall rules for `login.microsoftonline.com`, `graph.microsoft.com`, `management.azure.com`, `api.loganalytics.io`). With the private network option, all outbound traffic of the web app goes through the virtual network;
 - with your own PostgreSQL server: the network path from the app subnet to the server on port 5432 (routes, firewalls, intrusion detection on VPN devices).
