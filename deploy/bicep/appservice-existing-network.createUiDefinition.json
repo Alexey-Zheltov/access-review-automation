@@ -437,7 +437,7 @@
               "style": "Error",
               "text": "PostgreSQL Flexible Server is restricted in this region for your subscription. Choose another region, or ask Azure support to enable the region."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(first(map(coalesce(steps('database').capabilitiesApi.value, parse('[]')), (c) => c.restricted)), 'Enabled'))]"
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').capabilitiesApi.value, parse('[]')), (c) => equals(c.restricted, 'Enabled')))))]"
           },
           {
             "name": "check2",
@@ -446,7 +446,7 @@
               "style": "Error",
               "text": "This size is not offered in this region. Choose another size."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(steps('database').capabilitiesApi.value)), not(contains(string(steps('database').capabilitiesApi.value), concat('\"', steps('database').postgresSize, '\"')))))]"
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(coalesce(steps('database').capabilitiesApi.value, parse('[]')))), not(contains(string(coalesce(steps('database').capabilitiesApi.value, parse('[]'))), concat('\"', steps('database').postgresSize, '\"')))))]"
           },
           {
             "name": "check3",
@@ -464,7 +464,7 @@
               "style": "Error",
               "text": "Zone-redundant high availability is not supported in this region. Choose Same zone or Disabled."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(equals(steps('database').highAvailability, 'ZoneRedundant'), equals(first(map(coalesce(steps('database').capabilitiesApi.value, parse('[]')), (c) => c.zoneRedundantHaSupported)), 'Disabled')))]"
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(equals(steps('database').highAvailability, 'ZoneRedundant'), not(empty(filter(coalesce(steps('database').capabilitiesApi.value, parse('[]')), (c) => equals(c.zoneRedundantHaSupported, 'Disabled'))))))]"
           },
           {
             "name": "check5",
@@ -473,7 +473,7 @@
               "style": "Error",
               "text": "Not enough vCore quota for this size family in this region (see the quota line above). Choose another size family, or ask for more quota (Help + support > Service and subscription limits)."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), less(int(string(first(map(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))), (u) => sub(u.limit, u.currentValue))))), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))))]"
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => and(equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))), less(sub(u.limit, u.currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))))))))]"
           },
           {
             "name": "check6",
@@ -482,7 +482,7 @@
               "style": "Error",
               "text": "Not enough total PostgreSQL vCore quota in this region (see the quota line above). Ask for more quota, or choose a smaller size."
             },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))), less(int(string(first(map(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')), (u) => sub(u.limit, u.currentValue))))), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))))]"
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => and(equals(u.name.value, 'cores'), less(sub(u.limit, u.currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))))))))]"
           },
           {
             "name": "createOrderInfo",
