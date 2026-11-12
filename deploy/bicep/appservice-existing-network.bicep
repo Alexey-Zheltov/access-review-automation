@@ -3,10 +3,11 @@
 // Sample template: adapt it to your environment (names, network, policies) before production use.
 // Step-by-step guide: docs/DEPLOY-AZURE-APP-SERVICE.md, option D.
 //
-// The template creates no virtual network and no subnets. You give two existing subnets in the region of the deployment:
+// The template creates no virtual network and no subnets. You give existing subnets in the region of the deployment:
 //   - app subnet: VNet integration of the web app. All outbound traffic of the web app goes through your network.
 //     Only for App Service: delegated to Microsoft.Web/serverFarms before the deployment. /28 or larger, /26 recommended.
 //   - private endpoint subnet: the private endpoints of the web app, PostgreSQL, Key Vault and the container registry.
+//     Optional: another subnet for single private endpoints (webApp/postgres/keyVault/containerRegistryPrivateEndpointSubnetResourceId).
 // No public endpoints:
 //   - web app: private endpoint, public network access disabled. Users, deployments and the Kudu console work only from
 //     your network. Your DNS must resolve <appName>.azurewebsites.net and <appName>.scm.azurewebsites.net to the private endpoint.
@@ -72,8 +73,20 @@ param clientSecret string
 @description('Resource id of an existing subnet for the VNet integration of the web app: /subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>. Only for App Service and delegated to Microsoft.Web/serverFarms (the deployment does not change your subnets). /28 or larger, /26 recommended.')
 param appSubnetResourceId string
 
-@description('Resource id of an existing subnet for the private endpoints of the web app, PostgreSQL and Key Vault.')
+@description('Resource id of an existing subnet for the private endpoints of the web app, PostgreSQL, Key Vault and the container registry. The four parameters below put single private endpoints into other subnets.')
 param privateEndpointSubnetResourceId string
+
+@description('Optional: subnet for the private endpoint of the web app. Empty = privateEndpointSubnetResourceId. The subnet of an existing private endpoint cannot be changed: delete the endpoint first.')
+param webAppPrivateEndpointSubnetResourceId string = ''
+
+@description('AzurePostgreSQL only, optional: subnet for the private endpoint of PostgreSQL. Empty = privateEndpointSubnetResourceId.')
+param postgresPrivateEndpointSubnetResourceId string = ''
+
+@description('Optional: subnet for the private endpoint of the Key Vault (new vault, or existing vault with existingKeyVaultPrivateEndpoint). Empty = privateEndpointSubnetResourceId.')
+param keyVaultPrivateEndpointSubnetResourceId string = ''
+
+@description('Container only, optional: subnet for the private endpoint of the registry (new registry, or existing registry with existingContainerRegistryPrivateEndpoint). Empty = privateEndpointSubnetResourceId.')
+param containerRegistryPrivateEndpointSubnetResourceId string = ''
 
 @description('Existing private DNS zone privatelink.azurewebsites.net, for example in a hub subscription. Empty = create one in this resource group and link it to the VNet of the app subnet.')
 param webAppPrivateDnsZoneResourceId string = ''
@@ -216,7 +229,7 @@ var registryName = useExistingRegistry
 var registryLoginServer = '${toLower(registryName)}${environment().suffixes.acrLoginServer}'
 var registryEndpointNeeded = useContainer && (!useExistingRegistry || existingContainerRegistryPrivateEndpoint)
 
-// Both subnets must be subnet resource ids. The check stops the deployment before anything is created.
+// The subnets must be subnet resource ids. The check stops the deployment before anything is created.
 var subnetIdPart = '/providers/microsoft.network/virtualnetworks/'
 var badSubnetParameters = concat(
   contains(toLower(appSubnetResourceId), subnetIdPart) && contains(toLower(appSubnetResourceId), '/subnets/')
@@ -224,12 +237,28 @@ var badSubnetParameters = concat(
     : ['appSubnetResourceId'],
   contains(toLower(privateEndpointSubnetResourceId), subnetIdPart) && contains(toLower(privateEndpointSubnetResourceId), '/subnets/')
     ? []
-    : ['privateEndpointSubnetResourceId']
+    : ['privateEndpointSubnetResourceId'],
+  empty(webAppPrivateEndpointSubnetResourceId) || (contains(toLower(webAppPrivateEndpointSubnetResourceId), subnetIdPart) && contains(toLower(webAppPrivateEndpointSubnetResourceId), '/subnets/'))
+    ? []
+    : ['webAppPrivateEndpointSubnetResourceId'],
+  empty(postgresPrivateEndpointSubnetResourceId) || (contains(toLower(postgresPrivateEndpointSubnetResourceId), subnetIdPart) && contains(toLower(postgresPrivateEndpointSubnetResourceId), '/subnets/'))
+    ? []
+    : ['postgresPrivateEndpointSubnetResourceId'],
+  empty(keyVaultPrivateEndpointSubnetResourceId) || (contains(toLower(keyVaultPrivateEndpointSubnetResourceId), subnetIdPart) && contains(toLower(keyVaultPrivateEndpointSubnetResourceId), '/subnets/'))
+    ? []
+    : ['keyVaultPrivateEndpointSubnetResourceId'],
+  empty(containerRegistryPrivateEndpointSubnetResourceId) || (contains(toLower(containerRegistryPrivateEndpointSubnetResourceId), subnetIdPart) && contains(toLower(containerRegistryPrivateEndpointSubnetResourceId), '/subnets/'))
+    ? []
+    : ['containerRegistryPrivateEndpointSubnetResourceId']
 )
 var appSubnetId = empty(badSubnetParameters)
   ? appSubnetResourceId
   : fail('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: ${join(badSubnetParameters, ', ')}')
-var endpointSubnetId = privateEndpointSubnetResourceId
+// One subnet for all private endpoints, or another subnet for single endpoints.
+var siteEndpointSubnetId = empty(webAppPrivateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : webAppPrivateEndpointSubnetResourceId
+var postgresEndpointSubnetId = empty(postgresPrivateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : postgresPrivateEndpointSubnetResourceId
+var vaultEndpointSubnetId = empty(keyVaultPrivateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : keyVaultPrivateEndpointSubnetResourceId
+var registryEndpointSubnetId = empty(containerRegistryPrivateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : containerRegistryPrivateEndpointSubnetResourceId
 
 // Combinations that Azure rejects. The check stops the deployment before anything is created.
 var badOptions = concat(
@@ -376,7 +405,7 @@ resource postgresEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (
   tags: tags
   properties: {
     subnet: {
-      id: endpointSubnetId
+      id: postgresEndpointSubnetId
     }
     privateLinkServiceConnections: [
       {
@@ -426,7 +455,7 @@ module keyVault 'keyvault-private.bicep' = if (!useExistingVault) {
     enablePurgeProtection: enablePurgeProtection
     clientSecret: clientSecret
     connectionString: connectionString
-    endpointSubnetId: endpointSubnetId
+    endpointSubnetId: vaultEndpointSubnetId
     privateDnsZoneId: vaultZoneId
     identityId: identity.id
     identityPrincipalId: identity.properties.principalId
@@ -457,7 +486,7 @@ resource existingVaultEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' =
   tags: tags
   properties: {
     subnet: {
-      id: endpointSubnetId
+      id: vaultEndpointSubnetId
     }
     privateLinkServiceConnections: [
       {
@@ -496,7 +525,7 @@ module registry 'containerregistry-private.bicep' = if (useContainer && !useExis
     registryName: registryName
     location: location
     tags: tags
-    endpointSubnetId: endpointSubnetId
+    endpointSubnetId: registryEndpointSubnetId
     privateDnsZoneId: registryZoneId
     identityId: identity.id
     identityPrincipalId: identity.properties.principalId
@@ -523,7 +552,7 @@ resource existingRegistryEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01
   tags: tags
   properties: {
     subnet: {
-      id: endpointSubnetId
+      id: registryEndpointSubnetId
     }
     privateLinkServiceConnections: [
       {
@@ -685,7 +714,7 @@ resource siteEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   tags: tags
   properties: {
     subnet: {
-      id: endpointSubnetId
+      id: siteEndpointSubnetId
     }
     privateLinkServiceConnections: [
       {

@@ -182,7 +182,7 @@ Owner on the subscription of the portal does not give these rights when the netw
 
 Before the session, agree with the network team:
 
-- the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger). Option D needs two: the app subnet and the private endpoint subnet (three private endpoints, four with a new container registry);
+- the three subnets (sizes: app `/27` or larger, delegated to `Microsoft.Web/serverFarms`; PostgreSQL `/28` or larger, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`; private endpoints `/28` or larger). Option D needs two: the app subnet and the private endpoint subnet (three private endpoints, four with a new container registry), or a subnet for each private endpoint;
 - option D: how users and the deployment computer resolve `<app-name>.azurewebsites.net` and `<app-name>.scm.azurewebsites.net` to the private endpoint (for example a conditional forwarder for `privatelink.azurewebsites.net`);
 - who adds the DNS records if you get no rights on the hub zones;
 - outbound internet access from the app subnet (firewall rules for `login.microsoftonline.com`, `graph.microsoft.com`, `management.azure.com`, `api.loganalytics.io`). With the private network option, all outbound traffic of the web app goes through the virtual network;

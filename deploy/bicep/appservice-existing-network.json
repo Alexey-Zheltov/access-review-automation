@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "3462600150318603436"
+      "templateHash": "11224676871932940820"
     }
   },
   "parameters": {
@@ -97,7 +97,35 @@
     "privateEndpointSubnetResourceId": {
       "type": "string",
       "metadata": {
-        "description": "Resource id of an existing subnet for the private endpoints of the web app, PostgreSQL and Key Vault."
+        "description": "Resource id of an existing subnet for the private endpoints of the web app, PostgreSQL, Key Vault and the container registry. The four parameters below put single private endpoints into other subnets."
+      }
+    },
+    "webAppPrivateEndpointSubnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional: subnet for the private endpoint of the web app. Empty = privateEndpointSubnetResourceId. The subnet of an existing private endpoint cannot be changed: delete the endpoint first."
+      }
+    },
+    "postgresPrivateEndpointSubnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "AzurePostgreSQL only, optional: subnet for the private endpoint of PostgreSQL. Empty = privateEndpointSubnetResourceId."
+      }
+    },
+    "keyVaultPrivateEndpointSubnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional: subnet for the private endpoint of the Key Vault (new vault, or existing vault with existingKeyVaultPrivateEndpoint). Empty = privateEndpointSubnetResourceId."
+      }
+    },
+    "containerRegistryPrivateEndpointSubnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container only, optional: subnet for the private endpoint of the registry (new registry, or existing registry with existingContainerRegistryPrivateEndpoint). Empty = privateEndpointSubnetResourceId."
       }
     },
     "webAppPrivateDnsZoneResourceId": {
@@ -363,9 +391,12 @@
     "registryLoginServer": "[format('{0}{1}', toLower(variables('registryName')), environment().suffixes.acrLoginServer)]",
     "registryEndpointNeeded": "[and(variables('useContainer'), or(not(variables('useExistingRegistry')), parameters('existingContainerRegistryPrivateEndpoint')))]",
     "subnetIdPart": "/providers/microsoft.network/virtualnetworks/",
-    "badSubnetParameters": "[concat(if(and(contains(toLower(parameters('appSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('appSubnetResourceId')), '/subnets/')), createArray(), createArray('appSubnetResourceId')), if(and(contains(toLower(parameters('privateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('privateEndpointSubnetResourceId')), '/subnets/')), createArray(), createArray('privateEndpointSubnetResourceId')))]",
+    "badSubnetParameters": "[concat(if(and(contains(toLower(parameters('appSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('appSubnetResourceId')), '/subnets/')), createArray(), createArray('appSubnetResourceId')), if(and(contains(toLower(parameters('privateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('privateEndpointSubnetResourceId')), '/subnets/')), createArray(), createArray('privateEndpointSubnetResourceId')), if(or(empty(parameters('webAppPrivateEndpointSubnetResourceId')), and(contains(toLower(parameters('webAppPrivateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('webAppPrivateEndpointSubnetResourceId')), '/subnets/'))), createArray(), createArray('webAppPrivateEndpointSubnetResourceId')), if(or(empty(parameters('postgresPrivateEndpointSubnetResourceId')), and(contains(toLower(parameters('postgresPrivateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('postgresPrivateEndpointSubnetResourceId')), '/subnets/'))), createArray(), createArray('postgresPrivateEndpointSubnetResourceId')), if(or(empty(parameters('keyVaultPrivateEndpointSubnetResourceId')), and(contains(toLower(parameters('keyVaultPrivateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('keyVaultPrivateEndpointSubnetResourceId')), '/subnets/'))), createArray(), createArray('keyVaultPrivateEndpointSubnetResourceId')), if(or(empty(parameters('containerRegistryPrivateEndpointSubnetResourceId')), and(contains(toLower(parameters('containerRegistryPrivateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('containerRegistryPrivateEndpointSubnetResourceId')), '/subnets/'))), createArray(), createArray('containerRegistryPrivateEndpointSubnetResourceId')))]",
     "appSubnetId": "[if(empty(variables('badSubnetParameters')), parameters('appSubnetResourceId'), fail(format('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: {0}', join(variables('badSubnetParameters'), ', '))))]",
-    "endpointSubnetId": "[parameters('privateEndpointSubnetResourceId')]",
+    "siteEndpointSubnetId": "[if(empty(parameters('webAppPrivateEndpointSubnetResourceId')), parameters('privateEndpointSubnetResourceId'), parameters('webAppPrivateEndpointSubnetResourceId'))]",
+    "postgresEndpointSubnetId": "[if(empty(parameters('postgresPrivateEndpointSubnetResourceId')), parameters('privateEndpointSubnetResourceId'), parameters('postgresPrivateEndpointSubnetResourceId'))]",
+    "vaultEndpointSubnetId": "[if(empty(parameters('keyVaultPrivateEndpointSubnetResourceId')), parameters('privateEndpointSubnetResourceId'), parameters('keyVaultPrivateEndpointSubnetResourceId'))]",
+    "registryEndpointSubnetId": "[if(empty(parameters('containerRegistryPrivateEndpointSubnetResourceId')), parameters('privateEndpointSubnetResourceId'), parameters('containerRegistryPrivateEndpointSubnetResourceId'))]",
     "badOptions": "[concat(if(and(parameters('appServiceZoneRedundant'), not(startsWith(parameters('appServicePlanSku'), 'P'))), createArray('appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'), createArray()), if(and(and(variables('createPostgres'), not(equals(parameters('postgresHighAvailability'), 'Disabled'))), equals(variables('postgresSkuTier'), 'Burstable')), createArray('postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), not(equals(parameters('postgresHighAvailability'), 'ZoneRedundant'))), createArray('postgresStandbyAvailabilityZone needs postgresHighAvailability = ZoneRedundant'), createArray()), if(and(and(variables('createPostgres'), not(empty(parameters('postgresStandbyAvailabilityZone')))), equals(parameters('postgresStandbyAvailabilityZone'), parameters('postgresAvailabilityZone'))), createArray('postgresStandbyAvailabilityZone must be another zone than postgresAvailabilityZone'), createArray()), if(and(variables('useExistingVault'), not(and(contains(toLower(parameters('existingKeyVaultResourceId')), '/providers/microsoft.keyvault/vaults/'), equals(length(variables('existingVaultIdParts')), 9)))), createArray('existingKeyVaultResourceId must be the resource id of a Key Vault (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.KeyVault/vaults/<name>)'), createArray()), if(and(variables('useExistingRegistry'), not(and(contains(toLower(parameters('existingContainerRegistryResourceId')), '/providers/microsoft.containerregistry/registries/'), equals(length(variables('existingRegistryIdParts')), 9)))), createArray('existingContainerRegistryResourceId must be the resource id of a container registry (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.ContainerRegistry/registries/<name>)'), createArray()))]",
     "planSku": "[if(empty(variables('badOptions')), parameters('appServicePlanSku'), fail(format('Change these options: {0}', join(variables('badOptions'), '; '))))]",
     "vnetId": "[substring(variables('appSubnetId'), 0, lastIndexOf(variables('appSubnetId'), '/subnets/'))]",
@@ -503,7 +534,7 @@
       "tags": "[parameters('tags')]",
       "properties": {
         "subnet": {
-          "id": "[variables('endpointSubnetId')]"
+          "id": "[variables('postgresEndpointSubnetId')]"
         },
         "privateLinkServiceConnections": [
           {
@@ -551,7 +582,7 @@
       "tags": "[parameters('tags')]",
       "properties": {
         "subnet": {
-          "id": "[variables('endpointSubnetId')]"
+          "id": "[variables('vaultEndpointSubnetId')]"
         },
         "privateLinkServiceConnections": [
           {
@@ -599,7 +630,7 @@
       "tags": "[parameters('tags')]",
       "properties": {
         "subnet": {
-          "id": "[variables('endpointSubnetId')]"
+          "id": "[variables('registryEndpointSubnetId')]"
         },
         "privateLinkServiceConnections": [
           {
@@ -769,7 +800,7 @@
       "tags": "[parameters('tags')]",
       "properties": {
         "subnet": {
-          "id": "[variables('endpointSubnetId')]"
+          "id": "[variables('siteEndpointSubnetId')]"
         },
         "privateLinkServiceConnections": [
           {
@@ -1213,7 +1244,7 @@
           },
           "connectionString": "[if(not(variables('createPostgres')), createObject('value', parameters('existingServerConnectionString')), if(variables('useManagedIdentity'), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName'))), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))))]",
           "endpointSubnetId": {
-            "value": "[variables('endpointSubnetId')]"
+            "value": "[variables('vaultEndpointSubnetId')]"
           },
           "privateDnsZoneId": {
             "value": "[variables('vaultZoneId')]"
@@ -1597,7 +1628,7 @@
             "value": "[parameters('tags')]"
           },
           "endpointSubnetId": {
-            "value": "[variables('endpointSubnetId')]"
+            "value": "[variables('registryEndpointSubnetId')]"
           },
           "privateDnsZoneId": {
             "value": "[variables('registryZoneId')]"

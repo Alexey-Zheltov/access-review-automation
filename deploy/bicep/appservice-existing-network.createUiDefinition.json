@@ -36,14 +36,14 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "Choose your virtual network and two of its subnets. The template creates no virtual network and no subnets. The list shows the virtual networks in the region above, in all subscriptions that you can read."
+              "text": "Choose your virtual network and its subnets. The template creates no virtual network and no subnets. The list shows the virtual networks in the region above, in all subscriptions that you can read."
             }
           },
           {
             "name": "vnet",
             "type": "Microsoft.Solutions.ResourceSelector",
             "label": "Virtual network",
-            "toolTip": "The virtual network with the two subnets. It must be in the region above.",
+            "toolTip": "The virtual network with the subnets. It must be in the region above.",
             "resourceType": "Microsoft.Network/virtualNetworks",
             "options": {
               "filter": {
@@ -85,23 +85,91 @@
             "visible": "[and(not(empty(basics('network').vnetApi.properties.subnets)), empty(filter(basics('network').vnetApi.properties.subnets, (s) => contains(toLower(string(s.properties.delegations)), 'microsoft.web/serverfarms'))))]"
           },
           {
+            "name": "endpointMode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Private endpoint subnets",
+            "defaultValue": "One subnet for all private endpoints",
+            "toolTip": "One subnet: the private endpoints of the web app, PostgreSQL, Key Vault and the registry are in one subnet. A subnet for each service: you choose the subnet of each private endpoint, for example when your network has separate subnets for application and data endpoints.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "One subnet for all private endpoints",
+                  "value": "one"
+                },
+                {
+                  "label": "A subnet for each service",
+                  "value": "each"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
             "name": "endpointSubnet",
             "type": "Microsoft.Common.DropDown",
             "label": "Private endpoint subnet",
-            "toolTip": "The private endpoints of the web app, PostgreSQL and Key Vault (three IP addresses). The list shows subnets without delegation.",
+            "toolTip": "The private endpoints of the web app, PostgreSQL, Key Vault and, for a container, the registry: one IP address each. The list shows the subnets without delegation.",
             "filter": true,
             "constraints": {
               "required": true,
               "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
             },
-            "visible": true
+            "visible": "[equals(basics('network').endpointMode, 'one')]"
+          },
+          {
+            "name": "siteEndpointSubnet",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Web app endpoint subnet",
+            "toolTip": "Subnet of the private endpoint pe-<App name>. Users and the deployment workflow reach the portal through it. The list shows the subnets without delegation.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+            },
+            "visible": "[equals(basics('network').endpointMode, 'each')]"
+          },
+          {
+            "name": "postgresEndpointSubnet",
+            "type": "Microsoft.Common.DropDown",
+            "label": "PostgreSQL endpoint subnet",
+            "toolTip": "Subnet of the private endpoint pe-<server name> of the PostgreSQL server. The list shows the subnets without delegation.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+            },
+            "visible": "[and(equals(basics('network').endpointMode, 'each'), equals(basics('database').databaseServer, 'AzurePostgreSQL'))]"
+          },
+          {
+            "name": "vaultEndpointSubnet",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Key Vault endpoint subnet",
+            "toolTip": "Subnet of the private endpoint of the Key Vault: a new vault, or your existing vault when the template creates a private endpoint for it (section Key Vault). The list shows the subnets without delegation.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+            },
+            "visible": "[and(equals(basics('network').endpointMode, 'each'), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint))]"
+          },
+          {
+            "name": "registryEndpointSubnet",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Registry endpoint subnet",
+            "toolTip": "Container image only: subnet of the private endpoint of the registry, a new registry or your existing registry when the template creates a private endpoint for it (section Container registry). The list shows the subnets without delegation.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(filter(coalesce(basics('network').vnetApi.properties.subnets, parse('[]')), (s) => and(not(contains(parse('[\"GatewaySubnet\",\"AzureFirewallSubnet\",\"AzureFirewallManagementSubnet\",\"AzureBastionSubnet\",\"RouteServerSubnet\"]'), s.name)), empty(s.properties.delegations))), (s) => parse(concat('{\"label\":\"', s.name, ' (', coalesce(s.properties.addressPrefix, ''), ')\",\"value\":\"', s.id, '\"}')))]"
+            },
+            "visible": "[and(equals(basics('network').endpointMode, 'each'), equals(basics('app').deploymentType, 'Container'), or(equals(basics('registry').registryMode, 'new'), basics('registry').existingRegistryEndpoint))]"
           },
           {
             "name": "endpointInfo",
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "The template creates its private endpoints in this subnet: web app, PostgreSQL, Key Vault and, for a container, the registry. None of them has public access."
+              "text": "[if(equals(basics('network').endpointMode, 'each'), 'The template creates the private endpoint of each service in the subnet that you choose for it. None of the services has public access. The subnet of a private endpoint cannot be changed later: to move it, delete the private endpoint and deploy again.', 'The template creates its private endpoints in this subnet: web app, PostgreSQL, Key Vault and, for a container, the registry. None of them has public access.')]"
             }
           },
           {
@@ -111,7 +179,7 @@
               "style": "Error",
               "text": "Choose two different subnets. The App Service subnet is only for App Service."
             },
-            "visible": "[and(not(empty(basics('network').appSubnet)), equals(basics('network').appSubnet, basics('network').endpointSubnet))]"
+            "visible": "[and(equals(basics('network').endpointMode, 'one'), not(empty(basics('network').appSubnet)), equals(basics('network').appSubnet, basics('network').endpointSubnet))]"
           }
         ]
       },
@@ -195,7 +263,7 @@
           },
           {
             "name": "zoneRedundant",
-            "type": "Microsoft.Common.OptionsGroup",
+            "type": "Microsoft.Common.DropDown",
             "label": "Zone redundancy",
             "defaultValue": "Off (1 instance)",
             "toolTip": "Azure spreads the instances over the availability zones of the region and chooses the zones. App Service has no setting to choose a zone. Needs a Premium plan and a region with availability zones. Decide before the first deployment: an existing plan cannot always be changed later.",
@@ -1271,7 +1339,10 @@
       "clientId": "[basics('app').clientId]",
       "clientSecret": "[basics('app').clientSecret]",
       "appSubnetResourceId": "[basics('network').appSubnet]",
-      "privateEndpointSubnetResourceId": "[basics('network').endpointSubnet]",
+      "privateEndpointSubnetResourceId": "[if(equals(basics('network').endpointMode, 'each'), basics('network').siteEndpointSubnet, basics('network').endpointSubnet)]",
+      "postgresPrivateEndpointSubnetResourceId": "[if(and(equals(basics('network').endpointMode, 'each'), equals(basics('database').databaseServer, 'AzurePostgreSQL')), basics('network').postgresEndpointSubnet, '')]",
+      "keyVaultPrivateEndpointSubnetResourceId": "[if(and(equals(basics('network').endpointMode, 'each'), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint)), basics('network').vaultEndpointSubnet, '')]",
+      "containerRegistryPrivateEndpointSubnetResourceId": "[if(and(equals(basics('network').endpointMode, 'each'), equals(basics('app').deploymentType, 'Container'), or(equals(basics('registry').registryMode, 'new'), basics('registry').existingRegistryEndpoint)), basics('network').registryEndpointSubnet, '')]",
       "webAppPrivateDnsZoneResourceId": "[if(equals(basics('dns').dnsMode, 'existing'), basics('dns').siteZone, '')]",
       "postgresPrivateDnsZoneResourceId": "[if(and(equals(basics('dns').dnsMode, 'existing'), equals(basics('database').databaseServer, 'AzurePostgreSQL')), basics('dns').postgresZone, '')]",
       "keyVaultPrivateDnsZoneResourceId": "[if(and(equals(basics('dns').dnsMode, 'existing'), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint)), basics('dns').vaultZone, '')]",
