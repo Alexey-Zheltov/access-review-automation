@@ -39,6 +39,9 @@ param location string = resourceGroup().location
 @allowed(['B1', 'B2', 'B3', 'P0v3', 'P1v3', 'P2v3', 'P3v3', 'P1mv3', 'P2mv3'])
 param appServicePlanSku string = 'P0v3'
 
+@description('Zone redundancy of the App Service plan: two instances in different availability zones. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance.')
+param appServiceZoneRedundant bool = false
+
 @description('Microsoft Entra tenant id of the app registration.')
 param tenantId string = subscription().tenantId
 
@@ -109,6 +112,10 @@ param postgresStorageSizeGB int = 32
 @allowed(['16', '17', '18'])
 param postgresVersion string = '18'
 
+@description('High availability of PostgreSQL: ZoneRedundant = standby server in another availability zone, SameZone = standby in the same zone. Not with Burstable sizes. The standby doubles the compute cost.')
+@allowed(['Disabled', 'ZoneRedundant', 'SameZone'])
+param postgresHighAvailability string = 'Disabled'
+
 @description('Key Vault name (3-24 characters, globally unique). Empty = a name derived from the resource group and the app name.')
 @maxLength(24)
 param keyVaultName string = ''
@@ -147,6 +154,13 @@ var appSubnetId = empty(badSubnetParameters)
   ? appSubnetResourceId
   : fail('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: ${join(badSubnetParameters, ', ')}')
 var endpointSubnetId = privateEndpointSubnetResourceId
+
+// Combinations that Azure rejects. The check stops the deployment before anything is created.
+var badOptions = concat(
+  appServiceZoneRedundant && !startsWith(appServicePlanSku, 'P') ? ['appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'] : [],
+  createPostgres && postgresHighAvailability != 'Disabled' && postgresSkuTier == 'Burstable' ? ['postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'] : []
+)
+var planSku = empty(badOptions) ? appServicePlanSku : fail('Change these options: ${join(badOptions, '; ')}')
 // lastIndexOf is not case-sensitive.
 var vnetId = substring(appSubnetId, 0, lastIndexOf(appSubnetId, '/subnets/'))
 
@@ -157,11 +171,16 @@ var siteZoneId = createSiteZone ? siteZone.id : webAppPrivateDnsZoneResourceId
 var postgresZoneId = createPostgresZone ? postgresZone.id : postgresPrivateDnsZoneResourceId
 var vaultZoneId = createVaultZone ? vaultZone.id : keyVaultPrivateDnsZoneResourceId
 
+// PostgreSQL is created first. Some sizes are not available for every subscription in every region, and Azure reports this
+// (SkuNotAvailable) only when it creates the server. So the zones, the plan and everything after them wait for the server:
+// with an unavailable size the deployment stops after about two minutes and creates nothing else but the identity.
+
 // ------------------------------------------------------------------------------------------------ private DNS zones (new)
 resource siteZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (createSiteZone) {
   name: 'privatelink.azurewebsites.net'
   location: 'global'
   tags: tags
+  dependsOn: [postgres]
 }
 
 resource siteZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createSiteZone) {
@@ -180,6 +199,7 @@ resource postgresZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (creat
   name: 'privatelink.postgres.database.azure.com'
   location: 'global'
   tags: tags
+  dependsOn: [postgres]
 }
 
 resource postgresZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createPostgresZone) {
@@ -198,6 +218,7 @@ resource vaultZone 'Microsoft.Network/privateDnsZones@2024-06-01' = if (createVa
   name: 'privatelink.vaultcore.azure.net'
   location: 'global'
   tags: tags
+  dependsOn: [postgres]
 }
 
 resource vaultZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = if (createVaultZone) {
@@ -222,7 +243,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 
 // ------------------------------------------------------------------------------------------------ database
 module postgres 'postgres-flexible.bicep' = if (createPostgres) {
-  name: 'postgres-${uniqueString(serverName)}'
+  name: take('postgres-${serverName}', 64)
   params: {
     serverName: serverName
     location: location
@@ -237,6 +258,7 @@ module postgres 'postgres-flexible.bicep' = if (createPostgres) {
     skuName: postgresSkuName
     skuTier: postgresSkuTier
     storageSizeGB: postgresStorageSizeGB
+    highAvailability: postgresHighAvailability
     databaseName: databaseName
     publicNetworkAccess: false
     allowAzureServices: false
@@ -292,7 +314,7 @@ var connectionString = !createPostgres
 // ------------------------------------------------------------------------------------------------ secrets
 // Key Vault with a private endpoint only (public network access disabled), in the resource group keyVaultResourceGroup.
 module keyVault 'keyvault-private.bicep' = {
-  name: 'keyvault-${uniqueString(vaultName)}'
+  name: take('keyvault-${vaultName}', 64)
   scope: resourceGroup(vaultResourceGroup)
   params: {
     vaultName: vaultName
@@ -315,12 +337,15 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   tags: tags
   kind: 'linux'
   sku: {
-    name: appServicePlanSku
-    capacity: 1
+    name: planSku
+    // Zone redundancy needs at least two instances.
+    capacity: appServiceZoneRedundant ? 2 : 1
   }
   properties: {
     reserved: true
+    zoneRedundant: appServiceZoneRedundant
   }
+  dependsOn: [postgres]
 }
 
 resource webApp 'Microsoft.Web/sites@2024-04-01' = {
@@ -459,6 +484,7 @@ resource siteEndpointDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroup
 output portalUrl string = portalUrl
 output webAppName string = webApp.name
 output postgresFqdn string = postgresHost
+output postgresServerName string = createPostgres ? serverName : ''
 @description('User name of the portal in PostgreSQL. Managed identity: the identity name.')
 output postgresUser string = useManagedIdentity ? identityName : (createPostgres ? postgresAdminLogin : '')
 output keyVaultName string = vaultName

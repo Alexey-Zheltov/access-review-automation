@@ -22,7 +22,7 @@ Contents
 ## 1. What you deploy
 
 ```
- Reviewer's browser ──HTTPS──> Azure App Service (Linux, .NET 10, one instance)
+ Reviewer's browser ──HTTPS──> Azure App Service (Linux, .NET 10, one instance; two with zone redundancy)
                                   │  sign-in: Microsoft Entra ID
                                   ├──> Microsoft Graph, Azure Resource Manager, Azure Resource Graph
                                   │      scanner: read-only application permissions of the app registration
@@ -248,6 +248,16 @@ Use this option when the portal must be reachable only from your network. The te
 | Key Vault | A new Key Vault with a private endpoint, public network access disabled. It keeps the client secret and the connection string. In the resource group of the deployment, or in another existing resource group of the same subscription (`keyVaultResourceGroup`; in the portal form: tab **Key Vault**). |
 | Subnets (existing) | **App Service subnet**: only for App Service and delegated to `Microsoft.Web/serverFarms` before the deployment (the template does not change your subnets), `/28` or larger, `/26` recommended. **Private endpoint subnet**: the three private endpoints. Both in the region of the deployment. |
 | Private DNS zones | `privatelink.azurewebsites.net`, `privatelink.postgres.database.azure.com`, `privatelink.vaultcore.azure.net`: your existing zones, or new zones in the resource group, linked to the virtual network of the App Service subnet. |
+| Zone redundancy (optional) | App Service plan with two instances in different availability zones (`appServiceZoneRedundant=true`, Premium plan). PostgreSQL high availability with a standby server (`postgresHighAvailability=ZoneRedundant` or `SameZone`, not with Burstable sizes; the standby doubles the compute cost). The region must have availability zones. |
+
+Checks before the deployment:
+
+- The portal form lists only the virtual networks of the chosen region, subnets delegated to `Microsoft.Web/serverFarms` for App Service, and subnets without delegation for the private endpoints.
+- On the tab **Database** it reads the PostgreSQL offer of the region and your vCore quota, and shows the free quota. It stops you when the size is not offered, the quota of the size family or the total quota is too small (a standby counts double), the region is restricted for your subscription, or high availability does not fit the size or the region.
+- The template itself stops before it creates anything when a subnet value is not a subnet resource id, zone redundancy is chosen with a Basic plan, or high availability with a Burstable size. Azure checks the App Service quota at **Review + create**.
+- Some limits are known only when Azure creates the server (`SkuNotAvailable`). The template therefore creates PostgreSQL first: with such a size the deployment stops after about two minutes and creates nothing else but the managed identity.
+
+The PostgreSQL server gets the name from `postgresServerName` (portal form: **Server name**; empty = `psql-<app-name>`). The deployment step that creates it is named `postgres-<server name>`, the step of the Key Vault `keyvault-<vault name>`.
 
 Agree with your network team before you deploy:
 
@@ -284,6 +294,7 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
 
 - Existing zones: add `webAppPrivateDnsZoneResourceId=<id> postgresPrivateDnsZoneResourceId=<id> keyVaultPrivateDnsZoneResourceId=<id>`.
 - Key Vault in another resource group: add `keyVaultResourceGroup=<resource group>`. You need Contributor and Role Based Access Control Administrator there too.
+- Zone redundancy: add `appServiceZoneRedundant=true` and `postgresHighAvailability=ZoneRedundant` (with a General Purpose size).
 - `SkuNotAvailable` for PostgreSQL: this size is not available for your subscription in this region. Option D uses General Purpose `Standard_D2ds_v5` by default; Burstable sizes (`postgresSkuName=Standard_B2s`) are cheaper but not available everywhere. Choose another `postgresSkuName` and deploy again with the same values. The tier follows from the size.
 - Your own PostgreSQL server: add `databaseServer=ExistingServer existingServerConnectionString=$dbConnection` (option C).
 - The deployment stops before it creates anything if a subnet value is not a subnet resource id.

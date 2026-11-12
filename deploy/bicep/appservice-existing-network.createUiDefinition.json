@@ -184,6 +184,52 @@
         }
       },
       {
+        "name": "zoneRedundant",
+        "type": "Microsoft.Common.OptionsGroup",
+        "label": "Zone redundancy",
+        "defaultValue": "Off (1 instance)",
+        "toolTip": "On: two instances of the web app in different availability zones. Needs a Premium plan and a region with availability zones. Decide before the first deployment: an existing plan cannot always be changed later.",
+        "constraints": {
+          "allowedValues": [
+            {
+              "label": "Off (1 instance)",
+              "value": false
+            },
+            {
+              "label": "On (2 instances in different zones)",
+              "value": true
+            }
+          ],
+          "required": true
+        }
+      },
+      {
+        "name": "locationsApi",
+        "type": "Microsoft.Solutions.ArmApiControl",
+        "request": {
+          "method": "GET",
+          "path": "[concat(subscription().id, '/locations?api-version=2022-12-01')]"
+        }
+      },
+      {
+        "name": "zoneRedundantPlan",
+        "type": "Microsoft.Common.InfoBox",
+        "options": {
+          "style": "Error",
+          "text": "Zone redundancy needs a Premium plan (P0v3 or larger). Choose a P plan size."
+        },
+        "visible": "[and(basics('zoneRedundant'), not(contains(basics('appServicePlanSku'), 'P')))]"
+      },
+      {
+        "name": "zoneRedundantRegion",
+        "type": "Microsoft.Common.InfoBox",
+        "options": {
+          "style": "Error",
+          "text": "This region has no availability zones. Choose Off, or another region."
+        },
+        "visible": "[and(basics('zoneRedundant'), not(empty(basics('locationsApi').value)), empty(first(filter(coalesce(basics('locationsApi').value, parse('[]')), (l) => equals(l.name, location()))).availabilityZoneMappings))]"
+      },
+      {
         "name": "clientId",
         "type": "Microsoft.Common.TextBox",
         "label": "Client ID",
@@ -287,8 +333,8 @@
             "name": "postgresServerName",
             "type": "Microsoft.Common.TextBox",
             "label": "Server name",
-            "placeholder": "Empty: psql-<App name>",
-            "toolTip": "Name of the PostgreSQL server. Must be unique in Azure. Empty: psql-<App name>.",
+            "placeholder": "psql-<App name> if empty",
+            "toolTip": "Name of the PostgreSQL server in Azure, unique in Azure, lower case. Empty: psql-<App name>. The deployment step that creates it is named postgres-<server name>.",
             "constraints": {
               "required": false,
               "regex": "^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$",
@@ -330,11 +376,132 @@
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
-            "name": "skuHint",
+            "name": "highAvailability",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "High availability",
+            "defaultValue": "Disabled",
+            "toolTip": "Zone redundant: a standby server in another availability zone takes over automatically. Same zone: standby in the same zone. The standby doubles the compute cost. Not with Burstable sizes.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Disabled",
+                  "value": "Disabled"
+                },
+                {
+                  "label": "Zone redundant",
+                  "value": "ZoneRedundant"
+                },
+                {
+                  "label": "Same zone",
+                  "value": "SameZone"
+                }
+              ],
+              "required": true
+            },
+            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+          },
+          {
+            "name": "capabilitiesApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(subscription().id, '/providers/Microsoft.DBforPostgreSQL/locations/', location(), '/capabilities?api-version=2024-08-01')]"
+            }
+          },
+          {
+            "name": "usagesApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(subscription().id, '/providers/Microsoft.DBforPostgreSQL/locations/', location(), '/resourceType/flexibleServers/usages?api-version=2024-08-01')]"
+            }
+          },
+          {
+            "name": "quotaInfo",
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "If the deployment stops with SkuNotAvailable, this size is not available for your subscription in this region. Choose another size and deploy again with the same values."
+              "text": "[concat('vCore quota of your subscription in this region: ', string(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).currentValue)), ' free for this size family, ', string(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).currentValue)), ' free in total. This server needs ', string(mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))), ' (a standby with high availability counts double).')]"
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))))]"
+          },
+          {
+            "name": "check1",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "PostgreSQL Flexible Server is restricted in this region for your subscription. Choose another region, or ask Azure support to enable the region."
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(first(coalesce(steps('database').capabilitiesApi.value, parse('[{}]'))).restricted, 'Enabled'))]"
+          },
+          {
+            "name": "check2",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "This size is not offered in this region. Choose another size."
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(steps('database').capabilitiesApi.value)), not(contains(string(steps('database').capabilitiesApi.value), concat('\"', steps('database').postgresSize, '\"')))))]"
+          },
+          {
+            "name": "check3",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "High availability is not possible with Burstable sizes. Choose a General Purpose size, or turn high availability off."
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(equals(steps('database').highAvailability, 'Disabled')), contains(steps('database').postgresSize, 'Standard_B')))]"
+          },
+          {
+            "name": "check4",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "Zone-redundant high availability is not supported in this region. Choose Same zone or Disabled."
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(equals(steps('database').highAvailability, 'ZoneRedundant'), equals(first(coalesce(steps('database').capabilitiesApi.value, parse('[{}]'))).zoneRedundantHaSupported, 'Disabled')))]"
+          },
+          {
+            "name": "check5",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "Not enough vCore quota for this size family in this region (see the quota line above). Choose another size family, or ask for more quota (Help + support > Service and subscription limits)."
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))))]"
+          },
+          {
+            "name": "check6",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "Not enough total PostgreSQL vCore quota in this region (see the quota line above). Ask for more quota, or choose a smaller size."
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))))]"
+          },
+          {
+            "name": "databaseCheck",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Database check",
+            "defaultValue": "Not possible with these values",
+            "toolTip": "Shown only when the size, the high availability or the region does not work. Change them above.",
+            "constraints": {
+              "required": false,
+              "validations": [
+                {
+                  "isValid": "[false]",
+                  "message": "Change the size, the high availability or the region. See the messages above."
+                }
+              ]
+            },
+            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), or(equals(first(coalesce(steps('database').capabilitiesApi.value, parse('[{}]'))).restricted, 'Enabled'), and(not(empty(steps('database').capabilitiesApi.value)), not(contains(string(steps('database').capabilitiesApi.value), concat('\"', steps('database').postgresSize, '\"')))), and(not(equals(steps('database').highAvailability, 'Disabled')), contains(steps('database').postgresSize, 'Standard_B')), and(equals(steps('database').highAvailability, 'ZoneRedundant'), equals(first(coalesce(steps('database').capabilitiesApi.value, parse('[{}]'))).zoneRedundantHaSupported, 'Disabled')), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))))))]"
+          },
+          {
+            "name": "createOrderInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "Some limits are visible only when Azure creates the server (error SkuNotAvailable). The template creates PostgreSQL first: then the deployment stops after about two minutes, before it creates anything else. Choose another size and deploy again with the same values."
             },
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
           },
@@ -670,7 +837,9 @@
       "existingServerCaCertificate": "[if(equals(steps('database').databaseServer, 'ExistingServer'), coalesce(steps('database').existingServerCaCertificate, ''), '')]",
       "keyVaultName": "[coalesce(steps('keyVault').keyVaultName, '')]",
       "enablePurgeProtection": "[steps('keyVault').enablePurgeProtection]",
-      "keyVaultResourceGroup": "[if(equals(steps('keyVault').resourceGroupMode, 'other'), steps('keyVault').resourceGroup, '')]"
+      "keyVaultResourceGroup": "[if(equals(steps('keyVault').resourceGroupMode, 'other'), steps('keyVault').resourceGroup, '')]",
+      "appServiceZoneRedundant": "[basics('zoneRedundant')]",
+      "postgresHighAvailability": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), steps('database').highAvailability, 'Disabled')]"
     }
   }
 }

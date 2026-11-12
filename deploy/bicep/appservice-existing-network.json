@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "9486606603764167350"
+      "templateHash": "14386488197903760239"
     }
   },
   "parameters": {
@@ -40,6 +40,13 @@
       ],
       "metadata": {
         "description": "App Service plan size. See docs/SIZING.md."
+      }
+    },
+    "appServiceZoneRedundant": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Zone redundancy of the App Service plan: two instances in different availability zones. Needs a Premium plan (P0v3 or larger) and a region with availability zones. The portal supports more than one instance."
       }
     },
     "tenantId": {
@@ -183,6 +190,18 @@
         "18"
       ]
     },
+    "postgresHighAvailability": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Disabled",
+        "ZoneRedundant",
+        "SameZone"
+      ],
+      "metadata": {
+        "description": "High availability of PostgreSQL: ZoneRedundant = standby server in another availability zone, SameZone = standby in the same zone. Not with Burstable sizes. The standby doubles the compute cost."
+      }
+    },
     "keyVaultName": {
       "type": "string",
       "defaultValue": "",
@@ -226,6 +245,8 @@
     "badSubnetParameters": "[concat(if(and(contains(toLower(parameters('appSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('appSubnetResourceId')), '/subnets/')), createArray(), createArray('appSubnetResourceId')), if(and(contains(toLower(parameters('privateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('privateEndpointSubnetResourceId')), '/subnets/')), createArray(), createArray('privateEndpointSubnetResourceId')))]",
     "appSubnetId": "[if(empty(variables('badSubnetParameters')), parameters('appSubnetResourceId'), fail(format('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: {0}', join(variables('badSubnetParameters'), ', '))))]",
     "endpointSubnetId": "[parameters('privateEndpointSubnetResourceId')]",
+    "badOptions": "[concat(if(and(parameters('appServiceZoneRedundant'), not(startsWith(parameters('appServicePlanSku'), 'P'))), createArray('appServiceZoneRedundant needs a Premium plan (P0v3 or larger)'), createArray()), if(and(and(variables('createPostgres'), not(equals(parameters('postgresHighAvailability'), 'Disabled'))), equals(variables('postgresSkuTier'), 'Burstable')), createArray('postgresHighAvailability needs a General Purpose or Memory Optimized size, not Burstable'), createArray()))]",
+    "planSku": "[if(empty(variables('badOptions')), parameters('appServicePlanSku'), fail(format('Change these options: {0}', join(variables('badOptions'), '; '))))]",
     "vnetId": "[substring(variables('appSubnetId'), 0, lastIndexOf(variables('appSubnetId'), '/subnets/'))]",
     "createSiteZone": "[empty(parameters('webAppPrivateDnsZoneResourceId'))]",
     "createPostgresZone": "[and(variables('createPostgres'), empty(parameters('postgresPrivateDnsZoneResourceId')))]",
@@ -241,7 +262,10 @@
       "apiVersion": "2024-06-01",
       "name": "privatelink.azurewebsites.net",
       "location": "global",
-      "tags": "[parameters('tags')]"
+      "tags": "[parameters('tags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
     },
     {
       "condition": "[variables('createSiteZone')]",
@@ -265,7 +289,10 @@
       "apiVersion": "2024-06-01",
       "name": "privatelink.postgres.database.azure.com",
       "location": "global",
-      "tags": "[parameters('tags')]"
+      "tags": "[parameters('tags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
     },
     {
       "condition": "[variables('createPostgresZone')]",
@@ -289,7 +316,10 @@
       "apiVersion": "2024-06-01",
       "name": "privatelink.vaultcore.azure.net",
       "location": "global",
-      "tags": "[parameters('tags')]"
+      "tags": "[parameters('tags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
     },
     {
       "condition": "[variables('createVaultZone')]",
@@ -329,7 +359,7 @@
           {
             "name": "postgresqlServer",
             "properties": {
-              "privateLinkServiceId": "[reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.id.value]",
+              "privateLinkServiceId": "[reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.id.value]",
               "groupIds": [
                 "postgresqlServer"
               ]
@@ -338,7 +368,7 @@
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName'))))]"
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
       ]
     },
     {
@@ -370,12 +400,16 @@
       "tags": "[parameters('tags')]",
       "kind": "linux",
       "sku": {
-        "name": "[parameters('appServicePlanSku')]",
-        "capacity": 1
+        "name": "[variables('planSku')]",
+        "capacity": "[if(parameters('appServiceZoneRedundant'), 2, 1)]"
       },
       "properties": {
-        "reserved": true
-      }
+        "reserved": true,
+        "zoneRedundant": "[parameters('appServiceZoneRedundant')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]"
+      ]
     },
     {
       "type": "Microsoft.Web/sites",
@@ -411,7 +445,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', format('keyvault-{0}', uniqueString(variables('vaultName'))))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', take(format('keyvault-{0}', variables('vaultName')), 64))]",
         "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]"
       ]
     },
@@ -435,7 +469,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', format('keyvault-{0}', uniqueString(variables('vaultName'))))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', take(format('keyvault-{0}', variables('vaultName')), 64))]",
         "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('pe-{0}', variables('serverName')), 'default')]",
         "[resourceId('Microsoft.Web/sites', parameters('appName'))]"
       ]
@@ -534,7 +568,7 @@
       "condition": "[variables('createPostgres')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "[format('postgres-{0}', uniqueString(variables('serverName')))]",
+      "name": "[take(format('postgres-{0}', variables('serverName')), 64)]",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -568,6 +602,9 @@
           },
           "storageSizeGB": {
             "value": "[parameters('postgresStorageSizeGB')]"
+          },
+          "highAvailability": {
+            "value": "[parameters('postgresHighAvailability')]"
           },
           "databaseName": {
             "value": "[variables('databaseName')]"
@@ -896,7 +933,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "[format('keyvault-{0}', uniqueString(variables('vaultName')))]",
+      "name": "[take(format('keyvault-{0}', variables('vaultName')), 64)]",
       "resourceGroup": "[variables('vaultResourceGroup')]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -919,7 +956,7 @@
           "clientSecret": {
             "value": "[parameters('clientSecret')]"
           },
-          "connectionString": "[if(not(variables('createPostgres')), createObject('value', parameters('existingServerConnectionString')), if(variables('useManagedIdentity'), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName'))), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))))]",
+          "connectionString": "[if(not(variables('createPostgres')), createObject('value', parameters('existingServerConnectionString')), if(variables('useManagedIdentity'), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName'))), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))))]",
           "endpointSubnetId": {
             "value": "[variables('endpointSubnetId')]"
           },
@@ -1111,7 +1148,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-        "[resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName'))))]",
+        "[resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64))]",
         "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
         "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.vaultcore.azure.net', format('link-{0}', parameters('appName')))]"
       ]
@@ -1128,7 +1165,11 @@
     },
     "postgresFqdn": {
       "type": "string",
-      "value": "[if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, '')]"
+      "value": "[if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', take(format('postgres-{0}', variables('serverName')), 64)), '2025-04-01').outputs.fqdn.value, '')]"
+    },
+    "postgresServerName": {
+      "type": "string",
+      "value": "[if(variables('createPostgres'), variables('serverName'), '')]"
     },
     "postgresUser": {
       "type": "string",
