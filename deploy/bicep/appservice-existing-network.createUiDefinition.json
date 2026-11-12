@@ -485,24 +485,11 @@
             "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))))]"
           },
           {
-            "name": "databaseCheck",
-            "type": "Microsoft.Common.TextBox",
-            "label": "Database check",
-            "toolTip": "Shown only when the size, the high availability or the region does not work. You cannot create the deployment until you change them above.",
-            "constraints": {
-              "required": true,
-              "regex": "^[^\\s\\S]+$",
-              "validationMessage": "Change the size, the high availability or the region above. See the red messages."
-            },
-            "visible": "[and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), or(equals(first(coalesce(steps('database').capabilitiesApi.value, parse('[{}]'))).restricted, 'Enabled'), and(not(empty(steps('database').capabilitiesApi.value)), not(contains(string(steps('database').capabilitiesApi.value), concat('\"', steps('database').postgresSize, '\"')))), and(not(equals(steps('database').highAvailability, 'Disabled')), contains(steps('database').postgresSize, 'Standard_B')), and(equals(steps('database').highAvailability, 'ZoneRedundant'), equals(first(coalesce(steps('database').capabilitiesApi.value, parse('[{}]'))).zoneRedundantHaSupported, 'Disabled')), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family'))))))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, if(contains(steps('database').postgresSize, 'Standard_B'), 'standardBSFamily', if(contains(steps('database').postgresSize, 'ads_v5'), 'standardDADSv5Family', if(contains(steps('database').postgresSize, 'Standard_E'), 'standardEDSv5Family', 'standardDDSv5Family')))))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2)))), and(not(empty(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores')))), less(sub(first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).limit, first(filter(coalesce(steps('database').usagesApi.value, parse('[]')), (u) => equals(u.name.value, 'cores'))).currentValue), mul(if(contains(steps('database').postgresSize, 'D4'), 4, 2), if(equals(steps('database').highAvailability, 'Disabled'), 1, 2))))))]",
-            "placeholder": "Change the values above"
-          },
-          {
             "name": "createOrderInfo",
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "Some limits are visible only when Azure creates the server (error SkuNotAvailable). The template creates PostgreSQL first: then the deployment stops after about two minutes, before it creates anything else. Choose another size and deploy again with the same values."
+              "text": "The red messages above come from the PostgreSQL offer and the vCore quota of your subscription in this region. Some limits are visible only when Azure creates the server (error SkuNotAvailable). The template creates PostgreSQL first: then the deployment stops after about two minutes, before it creates anything else. Choose another size and deploy again with the same values."
             },
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
           },
