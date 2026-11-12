@@ -97,6 +97,14 @@
             "visible": true
           },
           {
+            "name": "endpointInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The template creates three private endpoints in this subnet: web app, PostgreSQL and Key Vault. None of them has public access."
+            }
+          },
+          {
             "name": "sameSubnet",
             "type": "Microsoft.Common.InfoBox",
             "options": {
@@ -226,6 +234,15 @@
               ],
               "required": true
             }
+          },
+          {
+            "name": "privateEndpointInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "The server has no public access. The template creates its private endpoint pe-<server name> in the private endpoint subnet (Basics tab) and the DNS record in the zone privatelink.postgres.database.azure.com (DNS zones tab)."
+            },
+            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
             "name": "databaseAuthentication",
