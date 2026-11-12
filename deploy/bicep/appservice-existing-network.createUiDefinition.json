@@ -27,10 +27,67 @@
         }
       },
       {
+        "name": "earlier",
+        "type": "Microsoft.Common.Section",
+        "label": "Earlier deployment",
+        "elements": [
+          {
+            "name": "found",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "[concat('Found in this resource group for this App name: ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => or(and(equals(r.type, 'microsoft.web/sites'), equals(r.name, toLower(coalesce(basics('app').appName, '')))), and(equals(r.type, 'microsoft.web/serverfarms'), equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, ''))))), and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, ''))))), and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))), and(equals(r.type, 'microsoft.network/privateendpoints'), or(equals(r.name, concat('pe-', toLower(coalesce(basics('app').appName, '')))), equals(r.name, concat('pe-', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|')))))), (r) => concat(r.name, ' (', if(equals(r.type, 'microsoft.web/sites'), 'web app', if(equals(r.type, 'microsoft.web/serverfarms'), 'App Service plan', if(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), 'managed identity', if(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), 'PostgreSQL server', 'private endpoint')))), if(not(empty(r.subnet)), concat(', subnet ', last(split(r.subnet, '/'))), if(not(empty(r.appSubnet)), concat(', App Service subnet ', last(split(r.appSubnet, '/'))), '')), ')'))), '[\"', ''), '\"]', ''), '\",\"', ', '), if(and(not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, '')))))))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), or(contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/providers/microsoft.keyvault/vaults/')), contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/providers/microsoft.containerregistry/registries/'))), not(contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|')))))))), concat(', ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), or(contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/providers/microsoft.keyvault/vaults/')), contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/providers/microsoft.containerregistry/registries/'))), not(contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|'))))), (r) => concat(r.name, ' (', if(equals(r.type, 'microsoft.web/sites'), 'web app', if(equals(r.type, 'microsoft.web/serverfarms'), 'App Service plan', if(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), 'managed identity', if(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), 'PostgreSQL server', 'private endpoint')))), if(not(empty(r.subnet)), concat(', subnet ', last(split(r.subnet, '/'))), if(not(empty(r.appSubnet)), concat(', App Service subnet ', last(split(r.appSubnet, '/'))), '')), ')'))), '[\"', ''), '\"]', ''), '\",\"', ', ')), ''), '. The deployment updates these resources and creates only what is missing. Keep the values of the earlier deployment: the same subnets (Azure cannot move a private endpoint), the same Server name and Key Vault name.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => or(and(equals(r.type, 'microsoft.web/sites'), equals(r.name, toLower(coalesce(basics('app').appName, '')))), and(equals(r.type, 'microsoft.web/serverfarms'), equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, ''))))), and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, ''))))), and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))), and(equals(r.type, 'microsoft.network/privateendpoints'), or(equals(r.name, concat('pe-', toLower(coalesce(basics('app').appName, '')))), equals(r.name, concat('pe-', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|')))))))))]"
+          },
+          {
+            "name": "otherApp",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "[concat('This resource group also has ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(or(and(equals(r.type, 'microsoft.web/serverfarms'), startsWith(r.name, 'asp-')), and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), startsWith(r.name, 'id-'), not(equals(r.name, 'id-accessreview-github')))), not(equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, ''))))), not(equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, ''))))))), (r) => r.name)), '[\"', ''), '\"]', ''), '\",\"', ', '), '. If they come from an earlier attempt of this deployment with another App name, use that App name (the part after asp- or id-). With a new App name the deployment creates a second web app, plan, identity and PostgreSQL server.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(or(and(equals(r.type, 'microsoft.web/serverfarms'), startsWith(r.name, 'asp-')), and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), startsWith(r.name, 'id-'), not(equals(r.name, 'id-accessreview-github')))), not(equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, ''))))), not(equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, ''))))))))))]"
+          },
+          {
+            "name": "deletedVault",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "[concat('Deleted Key Vault in the resource group ', toLower(if(equals(basics('keyVault').resourceGroupMode, 'other'), coalesce(basics('keyVault').resourceGroup, ''), resourceGroup().name)), ': ', replace(replace(replace(string(map(filter(coalesce(basics('network').deletedVaultsApi.value, parse('[]')), (v) => contains(toLower(coalesce(v.properties.vaultId, '')), concat('/resourcegroups/', toLower(if(equals(basics('keyVault').resourceGroupMode, 'other'), coalesce(basics('keyVault').resourceGroup, ''), resourceGroup().name)), '/'))), (v) => concat(v.name, ' (kept until ', substring(coalesce(v.properties.scheduledPurgeDate, '----------'), 0, 10), ')'))), '[\"', ''), '\"]', ''), '\",\"', ', '), '. A deployment that uses the same Key Vault name in this resource group restores the vault with its secrets and continues. With the same App name, an empty Key Vault name gives the same name as before. To start with a new, empty vault, enter another Key Vault name in the section Key Vault.')]"
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'new'), not(empty(filter(coalesce(basics('network').deletedVaultsApi.value, parse('[]')), (v) => contains(toLower(coalesce(v.properties.vaultId, '')), concat('/resourcegroups/', toLower(if(equals(basics('keyVault').resourceGroupMode, 'other'), coalesce(basics('keyVault').resourceGroup, ''), resourceGroup().name)), '/'))))))]"
+          }
+        ],
+        "visible": "[or(and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => or(and(equals(r.type, 'microsoft.web/sites'), equals(r.name, toLower(coalesce(basics('app').appName, '')))), and(equals(r.type, 'microsoft.web/serverfarms'), equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, ''))))), and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, ''))))), and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))), and(equals(r.type, 'microsoft.network/privateendpoints'), or(equals(r.name, concat('pe-', toLower(coalesce(basics('app').appName, '')))), equals(r.name, concat('pe-', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|'))))))))), and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(or(and(equals(r.type, 'microsoft.web/serverfarms'), startsWith(r.name, 'asp-')), and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), startsWith(r.name, 'id-'), not(equals(r.name, 'id-accessreview-github')))), not(equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, ''))))), not(equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, '')))))))))), and(equals(basics('keyVault').vaultMode, 'new'), not(empty(filter(coalesce(basics('network').deletedVaultsApi.value, parse('[]')), (v) => contains(toLower(coalesce(v.properties.vaultId, '')), concat('/resourcegroups/', toLower(if(equals(basics('keyVault').resourceGroupMode, 'other'), coalesce(basics('keyVault').resourceGroup, ''), resourceGroup().name)), '/')))))))]"
+      },
+      {
         "name": "network",
         "type": "Microsoft.Common.Section",
         "label": "Network",
         "elements": [
+          {
+            "name": "earlierApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "POST",
+              "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+              "body": {
+                "query": "[concat('resources | where subscriptionId =~ \"', subscription().subscriptionId, '\" and resourceGroup =~ \"', resourceGroup().name, '\" and type in~ (\"microsoft.web/sites\", \"microsoft.web/serverfarms\", \"microsoft.dbforpostgresql/flexibleservers\", \"microsoft.network/privateendpoints\", \"microsoft.managedidentity/userassignedidentities\") | project type = tolower(type), name = tolower(name), subnet = tolower(tostring(properties.subnet.id)), target = tolower(tostring(properties.privateLinkServiceConnections[0].properties.privateLinkServiceId)), appSubnet = tolower(tostring(properties.virtualNetworkSubnetId)), delegated = tostring(properties.network.delegatedSubnetResourceId), storage = toint(properties.storage.storageSizeGB), version = tostring(properties.version), zoneRedundant = tolower(tostring(properties.zoneRedundant)) | order by type asc, name asc')]",
+                "options": {
+                  "$top": 1000
+                }
+              }
+            }
+          },
+          {
+            "name": "deletedVaultsApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(subscription().id, '/providers/Microsoft.KeyVault/deletedVaults?api-version=2023-07-01')]"
+            }
+          },
           {
             "name": "networkInfo",
             "type": "Microsoft.Common.InfoBox",
@@ -173,6 +230,42 @@
             }
           },
           {
+            "name": "earlierSiteEndpoint",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The private endpoint ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(concat(r.target, '|'), concat('/providers/microsoft.web/sites/', toLower(coalesce(basics('app').appName, '')), '|')), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').siteEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').siteEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))), (r) => concat(r.name, ' in the subnet ', last(split(r.subnet, '/'))))), '[\"', ''), '\"]', ''), '\",\"', ', '), ' of the web app exists already. Azure cannot move a private endpoint to another subnet: choose this subnet, or delete the private endpoint before you deploy.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), true, not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(concat(r.target, '|'), concat('/providers/microsoft.web/sites/', toLower(coalesce(basics('app').appName, '')), '|')), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').siteEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').siteEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))))))]"
+          },
+          {
+            "name": "earlierPostgresEndpoint",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The private endpoint ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(concat(r.target, '|'), concat('/providers/microsoft.dbforpostgresql/flexibleservers/', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)), '|')), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').postgresEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').postgresEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))), (r) => concat(r.name, ' in the subnet ', last(split(r.subnet, '/'))))), '[\"', ''), '\"]', ''), '\",\"', ', '), ' of the PostgreSQL server exists already. Azure cannot move a private endpoint to another subnet: choose this subnet, or delete the private endpoint before you deploy.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(concat(r.target, '|'), concat('/providers/microsoft.dbforpostgresql/flexibleservers/', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)), '|')), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').postgresEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').postgresEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))))))]"
+          },
+          {
+            "name": "earlierVaultEndpoint",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The private endpoint ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(r.target, '/providers/microsoft.keyvault/vaults/'), or(contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/')), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|'))), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').vaultEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').vaultEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))), (r) => concat(r.name, ' in the subnet ', last(split(r.subnet, '/'))))), '[\"', ''), '\"]', ''), '\",\"', ', '), ' of the Key Vault exists already. Azure cannot move a private endpoint to another subnet: choose this subnet, or delete the private endpoint before you deploy.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, '')))))))), or(equals(basics('keyVault').vaultMode, 'new'), basics('keyVault').existingVaultEndpoint), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(r.target, '/providers/microsoft.keyvault/vaults/'), or(contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/')), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|'))), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').vaultEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').vaultEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))))))]"
+          },
+          {
+            "name": "earlierRegistryEndpoint",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The private endpoint ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(r.target, '/providers/microsoft.containerregistry/registries/'), or(contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/')), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|'))), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').registryEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').registryEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))), (r) => concat(r.name, ' in the subnet ', last(split(r.subnet, '/'))))), '[\"', ''), '\"]', ''), '\",\"', ', '), ' of the container registry exists already. Azure cannot move a private endpoint to another subnet: choose this subnet, or delete the private endpoint before you deploy.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.managedidentity/userassignedidentities'), equals(r.name, concat('id-', toLower(coalesce(basics('app').appName, '')))))))), and(equals(basics('app').deploymentType, 'Container'), or(equals(basics('registry').registryMode, 'new'), basics('registry').existingRegistryEndpoint)), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.network/privateendpoints'), contains(r.target, '/providers/microsoft.containerregistry/registries/'), or(contains(r.target, concat('/resourcegroups/', toLower(resourceGroup().name), '/')), contains(concat(r.name, '|'), concat('-', toLower(coalesce(basics('app').appName, '')), '|'))), not(empty(toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').registryEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))), not(equals(r.subnet, toLower(if(equals(basics('network').endpointMode, 'each'), coalesce(basics('network').registryEndpointSubnet, ''), coalesce(basics('network').endpointSubnet, ''))))))))))]"
+          },
+          {
             "name": "sameSubnet",
             "type": "Microsoft.Common.InfoBox",
             "options": {
@@ -284,6 +377,15 @@
               ],
               "required": true
             }
+          },
+          {
+            "name": "earlierPlanZone",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "[concat('The App Service plan asp-', toLower(coalesce(basics('app').appName, '')), ' exists already, with zone redundancy ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.web/serverfarms'), equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, '')))), not(equals(r.zoneRedundant, if(greater(basics('app').zoneRedundant, 1), 'true', 'false'))))), (r) => if(equals(r.zoneRedundant, 'true'), 'on', 'off'))), '[\"', ''), '\"]', ''), '\",\"', ', '), '. Azure may not change the zone redundancy of an existing plan, and zone-redundant instances need their own quota. If the deployment stops at the plan, choose the current setting and deploy again.')]"
+            },
+            "visible": "[and(not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.web/serverfarms'), equals(r.name, concat('asp-', toLower(coalesce(basics('app').appName, '')))), not(equals(r.zoneRedundant, if(greater(basics('app').zoneRedundant, 1), 'true', 'false'))))))))]"
           },
           {
             "name": "locationsApi",
@@ -462,6 +564,24 @@
               "validationMessage": "3-63 characters: lower-case letters, digits and hyphens."
             },
             "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
+          },
+          {
+            "name": "earlierServerOther",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "[concat('This resource group has the PostgreSQL server ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => equals(r.type, 'microsoft.dbforpostgresql/flexibleservers')), (r) => r.name)), '[\"', ''), '\"]', ''), '\",\"', ', '), '. With these values the deployment creates another server, ', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)), '. To continue with the server of an earlier attempt, enter its name in Server name.')]"
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => equals(r.type, 'microsoft.dbforpostgresql/flexibleservers')))), empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)))))))]"
+          },
+          {
+            "name": "earlierServerNetwork",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The server ', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)), ' exists already and uses VNet integration (a delegated subnet). Azure cannot change it to a private endpoint. Delete the server and deploy again, or enter another Server name.')]"
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName))), not(empty(r.delegated)))))))]"
           },
           {
             "name": "postgresSize",
@@ -715,6 +835,15 @@
             "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
           },
           {
+            "name": "earlierServerStorage",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The server ', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)), ' has ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName))), greater(coalesce(r.storage, 0), int(basics('database').postgresStorageSizeGB)))), (r) => string(r.storage))), '[\"', ''), '\"]', ''), '\",\"', ', '), ' GB of storage already. Azure cannot make the storage smaller: choose this size or a larger one.')]"
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName))), greater(coalesce(r.storage, 0), int(basics('database').postgresStorageSizeGB)))))))]"
+          },
+          {
             "name": "postgresVersion",
             "type": "Microsoft.Common.DropDown",
             "label": "PostgreSQL version",
@@ -737,6 +866,15 @@
               ]
             },
             "visible": "[equals(basics('database').databaseServer, 'AzurePostgreSQL')]"
+          },
+          {
+            "name": "earlierServerVersion",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Warning",
+              "text": "[concat('The server ', toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName)), ' runs PostgreSQL ', replace(replace(replace(string(map(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName))), not(empty(coalesce(r.version, ''))), not(equals(r.version, basics('database').postgresVersion)))), (r) => r.version)), '[\"', ''), '\"]', ''), '\",\"', ', '), '. Choose the same version here.')]"
+            },
+            "visible": "[and(equals(basics('database').databaseServer, 'AzurePostgreSQL'), not(empty(toLower(coalesce(basics('app').appName, '')))), not(empty(filter(coalesce(basics('network').earlierApi.data, parse('[]')), (r) => and(equals(r.type, 'microsoft.dbforpostgresql/flexibleservers'), equals(r.name, toLower(if(empty(coalesce(basics('database').postgresServerName, '')), concat('psql-', coalesce(basics('app').appName, '')), basics('database').postgresServerName))), not(empty(coalesce(r.version, ''))), not(equals(r.version, basics('database').postgresVersion)))))))]"
           },
           {
             "name": "ownServerInfo",
@@ -890,6 +1028,15 @@
               "validationMessage": "3-24 characters: letters, digits and hyphens. Starts with a letter."
             },
             "visible": "[equals(basics('keyVault').vaultMode, 'new')]"
+          },
+          {
+            "name": "earlierVaultName",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Error",
+              "text": "[concat('The name ', toLower(coalesce(basics('keyVault').keyVaultName, '')), ' belongs to a deleted Key Vault in another resource group (kept until ', replace(replace(replace(string(map(filter(coalesce(basics('network').deletedVaultsApi.value, parse('[]')), (v) => and(equals(toLower(v.name), toLower(coalesce(basics('keyVault').keyVaultName, ''))), not(contains(toLower(coalesce(v.properties.vaultId, '')), concat('/resourcegroups/', toLower(if(equals(basics('keyVault').resourceGroupMode, 'other'), coalesce(basics('keyVault').resourceGroup, ''), resourceGroup().name)), '/'))))), (v) => substring(coalesce(v.properties.scheduledPurgeDate, '----------'), 0, 10))), '[\"', ''), '\"]', ''), '\",\"', ', '), '). Azure keeps the name of a deleted vault, so the deployment would stop with VaultAlreadyExists. Enter another Key Vault name, or leave it empty.')]"
+            },
+            "visible": "[and(equals(basics('keyVault').vaultMode, 'new'), not(empty(toLower(coalesce(basics('keyVault').keyVaultName, '')))), not(empty(filter(coalesce(basics('network').deletedVaultsApi.value, parse('[]')), (v) => and(equals(toLower(v.name), toLower(coalesce(basics('keyVault').keyVaultName, ''))), not(contains(toLower(coalesce(v.properties.vaultId, '')), concat('/resourcegroups/', toLower(if(equals(basics('keyVault').resourceGroupMode, 'other'), coalesce(basics('keyVault').resourceGroup, ''), resourceGroup().name)), '/'))))))))]"
           },
           {
             "name": "enablePurgeProtection",
