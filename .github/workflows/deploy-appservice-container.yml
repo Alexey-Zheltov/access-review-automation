@@ -1,6 +1,7 @@
 # Build the portal image, push it to Azure Container Registry and run it on Azure App Service (Web App for Containers).
 # For the template deploy/bicep/appservice-existing-network.bicep with deploymentType = Container: the web app pulls the image
 # through the VNet with its managed identity. Microsoft Defender for Containers or Defender CSPM scans the images in the registry.
+# The build pulls the current .NET base images: run the workflow regularly (for example monthly) to get their security fixes.
 # The NuGet audit in Directory.Build.props stops the build when a package has a known high or critical vulnerability.
 #
 # Sign-in to Azure: OpenID Connect with a user-assigned managed identity, as in deploy-appservice.yml. No secret is stored in GitHub.
@@ -69,7 +70,7 @@ jobs:
           if [ -z "$LOGIN_SERVER" ]; then echo "::error::Set the variable ACR_LOGIN_SERVER, for example crcontoso.azurecr.io"; exit 1; fi
           image="$LOGIN_SERVER/$REPOSITORY:${GITHUB_SHA::12}"
           echo "IMAGE=$image" >> "$GITHUB_ENV"
-          docker build --target runtime --build-arg SOURCE_REVISION="$GITHUB_SHA" \
+          docker build --pull --target runtime --build-arg SOURCE_REVISION="$GITHUB_SHA" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -t "$image" -t "$LOGIN_SERVER/$REPOSITORY:latest" .
 

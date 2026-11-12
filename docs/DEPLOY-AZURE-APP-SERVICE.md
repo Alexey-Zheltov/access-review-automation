@@ -355,7 +355,7 @@ With `deploymentType=Container` the web app runs the image from the registry ins
 $loginServer = az deployment group show --resource-group $resourceGroup --name accessreview `
     --query properties.outputs.containerRegistryLoginServer.value -o tsv
 az acr login --name $loginServer.Split('.')[0]
-docker build --target runtime --build-arg SOURCE_REVISION=$(git rev-parse HEAD) -t "$loginServer/access-review-portal:latest" .
+docker build --pull --target runtime --build-arg SOURCE_REVISION=$(git rev-parse HEAD) -t "$loginServer/access-review-portal:latest" .
 docker push "$loginServer/access-review-portal:latest"
 az webapp restart --resource-group $resourceGroup --name $appName
 ```
@@ -363,7 +363,7 @@ az webapp restart --resource-group $resourceGroup --name $appName
 - App Service keeps the old container running until the new one answers. `/healthz` returns the commit of the image in the header `X-Portal-Revision`: check it from your network with `curl -sI https://<app-name>.azurewebsites.net/healthz`.
 - The template sets the image tag `latest`. A new run of the template switches the web app back to `latest`, so push `latest` with every build. The workflow `deploy-appservice-container.yml` pushes the tags `<commit>` and `latest` and switches the web app to `<commit>` ([Deploy with GitHub Actions](#deploy-with-github-actions-optional)).
 - The web app pulls the image with its managed identity `id-<app-name>` through the VNet integration. No registry password is stored.
-- Microsoft Defender for Cloud scans the images in the registry when the subscription of the registry has the plan **Defender for Containers** or **Defender CSPM** with agentless container vulnerability assessment. The findings are in **Defender for Cloud > Recommendations**: "Azure registry container images should have vulnerabilities resolved". A registry without public access must allow trusted Microsoft services; the template sets this for a new registry.
+- Microsoft Defender for Cloud scans the images in the registry when the subscription of the registry has the plan **Defender for Containers** or **Defender CSPM** with agentless container vulnerability assessment. The findings are in **Defender for Cloud > Recommendations** for the registry: one recommendation per package, for example "Update openssl" (older view: "Azure registry container images should have vulnerabilities resolved"). A registry without public access must allow trusted Microsoft services; the template sets this for a new registry.
 
 ## Step 6. Check the installation
 
@@ -499,7 +499,7 @@ The first run takes about five minutes. The step **Health check** ends with "The
 ## Vulnerability checks
 
 - **Packages.** Every build (local, CI, both workflows and `docker build`) runs the NuGet audit of the .NET SDK. `Directory.Build.props` turns known vulnerabilities of high and critical severity into errors (NU1903, NU1904), also for transitive packages: the build stops and names the package and the advisory. Update the package, or add a direct reference with the fixed version for a transitive one. Low and moderate vulnerabilities stay warnings. The audit reads the vulnerability data of the package source (nuget.org); warning NU1900 means that it could not read them, so the check did not run.
-- **Container image.** Microsoft Defender for Containers or Defender CSPM scans the image in Azure Container Registry: the packages of the operating system and the .NET packages ([Container image](#container-image-option-d)).
+- **Container image.** Microsoft Defender for Containers or Defender CSPM scans the image in Azure Container Registry: the packages of the operating system and the .NET packages ([Container image](#container-image-option-d)). The build uses `--pull`, so each image gets the current patches of the .NET base image. Run the container workflow regularly, for example once a month, also without code changes: new fixes of the base image get into the portal only with a new image.
 - **Code package.** App Service updates the operating system and the .NET runtime of the web app. The packages of the portal are checked by the build.
 - Optional: Dependabot alerts in GitHub, and the GitHub connector of Defender for Cloud (DevOps security), also report vulnerable packages of the repository.
 
