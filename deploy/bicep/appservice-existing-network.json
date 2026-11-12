@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "12006180836712410855"
+      "templateHash": "9486606603764167350"
     }
   },
   "parameters": {
@@ -150,19 +150,22 @@
     },
     "postgresSkuName": {
       "type": "string",
-      "defaultValue": "Standard_B2s",
-      "metadata": {
-        "description": "PostgreSQL compute size. See docs/SIZING.md."
-      }
-    },
-    "postgresSkuTier": {
-      "type": "string",
-      "defaultValue": "Burstable",
+      "defaultValue": "Standard_D2ds_v5",
       "allowedValues": [
-        "Burstable",
-        "GeneralPurpose",
-        "MemoryOptimized"
-      ]
+        "Standard_B1ms",
+        "Standard_B2s",
+        "Standard_B2ms",
+        "Standard_D2ds_v5",
+        "Standard_D4ds_v5",
+        "Standard_D8ds_v5",
+        "Standard_D2ads_v5",
+        "Standard_D4ads_v5",
+        "Standard_E2ds_v5",
+        "Standard_E4ds_v5"
+      ],
+      "metadata": {
+        "description": "PostgreSQL compute size. The tier follows from the name: Standard_B = Burstable, Standard_D = General Purpose, Standard_E = Memory Optimized. Burstable sizes are not available for every subscription in every region (SkuNotAvailable). See docs/SIZING.md."
+      }
     },
     "postgresStorageSizeGB": {
       "type": "int",
@@ -188,6 +191,13 @@
         "description": "Key Vault name (3-24 characters, globally unique). Empty = a name derived from the resource group and the app name."
       }
     },
+    "keyVaultResourceGroup": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group of the Key Vault, in the same subscription. It must exist. Empty = the resource group of the deployment. The Key Vault always has a private endpoint and no public access."
+      }
+    },
     "enablePurgeProtection": {
       "type": "bool",
       "defaultValue": true,
@@ -203,14 +213,15 @@
     }
   },
   "variables": {
-    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
     "portalUrl": "[format('https://{0}.azurewebsites.net', parameters('appName'))]",
     "databaseName": "accessreview",
     "createPostgres": "[equals(parameters('databaseServer'), 'AzurePostgreSQL')]",
     "useManagedIdentity": "[and(variables('createPostgres'), equals(parameters('databaseAuthentication'), 'ManagedIdentity'))]",
     "identityName": "[format('id-{0}', parameters('appName'))]",
+    "postgresSkuTier": "[if(startsWith(parameters('postgresSkuName'), 'Standard_B'), 'Burstable', if(startsWith(parameters('postgresSkuName'), 'Standard_E'), 'MemoryOptimized', 'GeneralPurpose'))]",
     "serverName": "[if(empty(parameters('postgresServerName')), format('psql-{0}', parameters('appName')), parameters('postgresServerName'))]",
     "vaultName": "[if(empty(parameters('keyVaultName')), format('kv-{0}', uniqueString(resourceGroup().id, parameters('appName'))), parameters('keyVaultName'))]",
+    "vaultResourceGroup": "[if(empty(parameters('keyVaultResourceGroup')), resourceGroup().name, parameters('keyVaultResourceGroup'))]",
     "subnetIdPart": "/providers/microsoft.network/virtualnetworks/",
     "badSubnetParameters": "[concat(if(and(contains(toLower(parameters('appSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('appSubnetResourceId')), '/subnets/')), createArray(), createArray('appSubnetResourceId')), if(and(contains(toLower(parameters('privateEndpointSubnetResourceId')), variables('subnetIdPart')), contains(toLower(parameters('privateEndpointSubnetResourceId')), '/subnets/')), createArray(), createArray('privateEndpointSubnetResourceId')))]",
     "appSubnetId": "[if(empty(variables('badSubnetParameters')), parameters('appSubnetResourceId'), fail(format('Give the resource id of an existing subnet (/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>) in: {0}', join(variables('badSubnetParameters'), ', '))))]",
@@ -352,115 +363,6 @@
       ]
     },
     {
-      "type": "Microsoft.KeyVault/vaults",
-      "apiVersion": "2023-07-01",
-      "name": "[variables('vaultName')]",
-      "location": "[parameters('location')]",
-      "tags": "[parameters('tags')]",
-      "properties": {
-        "tenantId": "[subscription().tenantId]",
-        "sku": {
-          "family": "A",
-          "name": "standard"
-        },
-        "enableRbacAuthorization": true,
-        "enableSoftDelete": true,
-        "softDeleteRetentionInDays": 90,
-        "enablePurgeProtection": "[if(parameters('enablePurgeProtection'), true(), null())]",
-        "publicNetworkAccess": "Disabled",
-        "networkAcls": {
-          "defaultAction": "Deny",
-          "bypass": "None"
-        }
-      }
-    },
-    {
-      "type": "Microsoft.KeyVault/vaults/secrets",
-      "apiVersion": "2023-07-01",
-      "name": "[format('{0}/{1}', variables('vaultName'), 'portal-client-secret')]",
-      "properties": {
-        "value": "[parameters('clientSecret')]",
-        "contentType": "Client secret of the app registration"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.KeyVault/vaults/secrets",
-      "apiVersion": "2023-07-01",
-      "name": "[format('{0}/{1}', variables('vaultName'), 'portal-db-connection')]",
-      "properties": {
-        "value": "[if(not(variables('createPostgres')), parameters('existingServerConnectionString'), if(variables('useManagedIdentity'), format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName')), format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword'))))]",
-        "contentType": "Npgsql connection string"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName'))))]",
-        "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Network/privateEndpoints",
-      "apiVersion": "2024-05-01",
-      "name": "[format('pe-{0}', variables('vaultName'))]",
-      "location": "[parameters('location')]",
-      "tags": "[parameters('tags')]",
-      "properties": {
-        "subnet": {
-          "id": "[variables('endpointSubnetId')]"
-        },
-        "privateLinkServiceConnections": [
-          {
-            "name": "vault",
-            "properties": {
-              "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]",
-              "groupIds": [
-                "vault"
-              ]
-            }
-          }
-        ]
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
-      "apiVersion": "2024-05-01",
-      "name": "[format('{0}/{1}', format('pe-{0}', variables('vaultName')), 'default')]",
-      "properties": {
-        "privateDnsZoneConfigs": [
-          {
-            "name": "vault",
-            "properties": {
-              "privateDnsZoneId": "[variables('vaultZoneId')]"
-            }
-          }
-        ]
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('vaultName')))]",
-        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
-        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.vaultcore.azure.net', format('link-{0}', parameters('appName')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]",
-      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('vaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), variables('keyVaultSecretsUserRoleId'))]",
-      "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-        "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]"
-      ]
-    },
-    {
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2024-04-01",
       "name": "[format('asp-{0}', parameters('appName'))]",
@@ -509,9 +411,8 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-        "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]",
-        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('vaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('vaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), variables('keyVaultSecretsUserRoleId')))]",
-        "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('pe-{0}', variables('vaultName')), 'default')]"
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', format('keyvault-{0}', uniqueString(variables('vaultName'))))]",
+        "[resourceId('Microsoft.Web/serverfarms', format('asp-{0}', parameters('appName')))]"
       ]
     },
     {
@@ -533,9 +434,8 @@
         "ConnectionStrings__DefaultConnection": "[format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-db-connection)', variables('vaultName'))]"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('vaultName'), 'portal-client-secret')]",
-        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('vaultName'), 'portal-db-connection')]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('vaultResourceGroup')), 'Microsoft.Resources/deployments', format('keyvault-{0}', uniqueString(variables('vaultName'))))]",
         "[resourceId('Microsoft.Network/privateEndpoints/privateDnsZoneGroups', format('pe-{0}', variables('serverName')), 'default')]",
         "[resourceId('Microsoft.Web/sites', parameters('appName'))]"
       ]
@@ -664,7 +564,7 @@
             "value": "[parameters('postgresSkuName')]"
           },
           "skuTier": {
-            "value": "[parameters('postgresSkuTier')]"
+            "value": "[variables('postgresSkuTier')]"
           },
           "storageSizeGB": {
             "value": "[parameters('postgresStorageSizeGB')]"
@@ -992,6 +892,229 @@
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
       ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('keyvault-{0}', uniqueString(variables('vaultName')))]",
+      "resourceGroup": "[variables('vaultResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "vaultName": {
+            "value": "[variables('vaultName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "enablePurgeProtection": {
+            "value": "[parameters('enablePurgeProtection')]"
+          },
+          "clientSecret": {
+            "value": "[parameters('clientSecret')]"
+          },
+          "connectionString": "[if(not(variables('createPostgres')), createObject('value', parameters('existingServerConnectionString')), if(variables('useManagedIdentity'), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), variables('identityName'))), createObject('value', format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=VerifyFull', if(variables('createPostgres'), reference(resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName')))), '2025-04-01').outputs.fqdn.value, ''), variables('databaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword')))))]",
+          "endpointSubnetId": {
+            "value": "[variables('endpointSubnetId')]"
+          },
+          "privateDnsZoneId": {
+            "value": "[variables('vaultZoneId')]"
+          },
+          "identityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+          },
+          "identityPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.49.2.45890",
+              "templateHash": "1374141320031910889"
+            }
+          },
+          "parameters": {
+            "vaultName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "enablePurgeProtection": {
+              "type": "bool"
+            },
+            "clientSecret": {
+              "type": "securestring"
+            },
+            "connectionString": {
+              "type": "securestring"
+            },
+            "endpointSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet of the private endpoint of the vault."
+              }
+            },
+            "privateDnsZoneId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private DNS zone privatelink.vaultcore.azure.net."
+              }
+            },
+            "identityId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource id of the user-assigned managed identity of the web app."
+              }
+            },
+            "identityPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal id of the same identity."
+              }
+            }
+          },
+          "variables": {
+            "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults",
+              "apiVersion": "2023-07-01",
+              "name": "[parameters('vaultName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "tenantId": "[subscription().tenantId]",
+                "sku": {
+                  "family": "A",
+                  "name": "standard"
+                },
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionInDays": 90,
+                "enablePurgeProtection": "[if(parameters('enablePurgeProtection'), true(), null())]",
+                "publicNetworkAccess": "Disabled",
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "None"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('vaultName'), 'portal-client-secret')]",
+              "properties": {
+                "value": "[parameters('clientSecret')]",
+                "contentType": "Client secret of the app registration"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('vaultName'), 'portal-db-connection')]",
+              "properties": {
+                "value": "[parameters('connectionString')]",
+                "contentType": "Npgsql connection string"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', parameters('vaultName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('endpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "vault",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', parameters('vaultName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "vault",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', parameters('vaultName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), parameters('identityId'), variables('keyVaultSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]",
+                "principalId": "[parameters('identityPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('vaultName')]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.Resources/deployments', format('postgres-{0}', uniqueString(variables('serverName'))))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
+        "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.vaultcore.azure.net', format('link-{0}', parameters('appName')))]"
+      ]
     }
   ],
   "outputs": {
@@ -1017,6 +1140,10 @@
     "keyVaultName": {
       "type": "string",
       "value": "[variables('vaultName')]"
+    },
+    "keyVaultResourceGroup": {
+      "type": "string",
+      "value": "[variables('vaultResourceGroup')]"
     },
     "identityName": {
       "type": "string",

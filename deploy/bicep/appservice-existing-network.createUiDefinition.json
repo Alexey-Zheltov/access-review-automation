@@ -300,19 +300,11 @@
             "name": "postgresSize",
             "type": "Microsoft.Common.DropDown",
             "label": "Compute size",
-            "toolTip": "Burstable B2s is enough for most tenants. See docs/SIZING.md. The size must be available for your subscription in the region.",
-            "defaultValue": "Burstable B2s (2 vCores, 4 GB)",
+            "toolTip": "General Purpose D2ds_v5 is enough for most tenants and is available in all regions. Burstable is cheaper but not available for every subscription in every region. See docs/SIZING.md.",
+            "defaultValue": "General Purpose D2ds_v5 (2 vCores, 8 GB)",
             "constraints": {
               "required": true,
               "allowedValues": [
-                {
-                  "label": "Burstable B2s (2 vCores, 4 GB)",
-                  "value": "Standard_B2s"
-                },
-                {
-                  "label": "Burstable B2ms (2 vCores, 8 GB)",
-                  "value": "Standard_B2ms"
-                },
                 {
                   "label": "General Purpose D2ds_v5 (2 vCores, 8 GB)",
                   "value": "Standard_D2ds_v5"
@@ -320,8 +312,29 @@
                 {
                   "label": "General Purpose D4ds_v5 (4 vCores, 16 GB)",
                   "value": "Standard_D4ds_v5"
+                },
+                {
+                  "label": "General Purpose D2ads_v5 (2 vCores, 8 GB)",
+                  "value": "Standard_D2ads_v5"
+                },
+                {
+                  "label": "Burstable B2s (2 vCores, 4 GB)",
+                  "value": "Standard_B2s"
+                },
+                {
+                  "label": "Burstable B2ms (2 vCores, 8 GB)",
+                  "value": "Standard_B2ms"
                 }
               ]
+            },
+            "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
+          },
+          {
+            "name": "skuHint",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "If the deployment stops with SkuNotAvailable, this size is not available for your subscription in this region. Choose another size and deploy again with the same values."
             },
             "visible": "[equals(steps('database').databaseServer, 'AzurePostgreSQL')]"
           },
@@ -545,8 +558,73 @@
             "type": "Microsoft.Common.InfoBox",
             "options": {
               "style": "Info",
-              "text": "Key Vault keeps the client secret and the database connection string. It has a private endpoint and no public access. The web app reads it with its managed identity."
+              "text": "The template creates a new Key Vault for the client secret and the database connection string. The web app reads them with its managed identity id-<App name>, which gets the role Key Vault Secrets User on this vault only."
             }
+          },
+          {
+            "name": "networkAccess",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Network access",
+            "defaultValue": "Private endpoint only (public network access disabled)",
+            "toolTip": "The Key Vault gets a private endpoint in the private endpoint subnet (Basics tab) and its DNS record in the zone privatelink.vaultcore.azure.net (DNS zones tab). Public network access is disabled, with no exceptions.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Private endpoint only (public network access disabled)",
+                  "value": "PrivateEndpoint"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "resourceGroupMode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Resource group",
+            "defaultValue": "Same resource group as the portal",
+            "toolTip": "The Key Vault, its private endpoint and the role assignment go to this resource group.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Same resource group as the portal",
+                  "value": "same"
+                },
+                {
+                  "label": "Another resource group",
+                  "value": "other"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "resourceGroupsApi",
+            "type": "Microsoft.Solutions.ArmApiControl",
+            "request": {
+              "method": "GET",
+              "path": "[concat(subscription().id, '/resourcegroups?api-version=2021-04-01')]"
+            }
+          },
+          {
+            "name": "resourceGroup",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Key Vault resource group",
+            "toolTip": "An existing resource group in the subscription of the Basics tab.",
+            "filter": true,
+            "constraints": {
+              "required": true,
+              "allowedValues": "[map(coalesce(steps('keyVault').resourceGroupsApi.value, parse('[]')), (g) => parse(concat('{\"label\":\"', g.name, '\",\"value\":\"', g.name, '\"}')))]"
+            },
+            "visible": "[equals(steps('keyVault').resourceGroupMode, 'other')]"
+          },
+          {
+            "name": "resourceGroupInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "style": "Info",
+              "text": "You need Contributor and Role Based Access Control Administrator on this resource group too."
+            },
+            "visible": "[equals(steps('keyVault').resourceGroupMode, 'other')]"
           },
           {
             "name": "keyVaultName",
@@ -586,13 +664,13 @@
       "postgresAdminPassword": "[if(and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(steps('database').databaseAuthentication, 'Password')), steps('database').postgresAdminPassword, '')]",
       "postgresServerName": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), coalesce(steps('database').postgresServerName, ''), '')]",
       "postgresSkuName": "[steps('database').postgresSize]",
-      "postgresSkuTier": "[if(contains(steps('database').postgresSize, 'Standard_B'), 'Burstable', 'GeneralPurpose')]",
       "postgresStorageSizeGB": "[steps('database').postgresStorageSizeGB]",
       "postgresVersion": "[steps('database').postgresVersion]",
       "existingServerConnectionString": "[if(equals(steps('database').databaseServer, 'ExistingServer'), steps('database').existingServerConnectionString, '')]",
       "existingServerCaCertificate": "[if(equals(steps('database').databaseServer, 'ExistingServer'), coalesce(steps('database').existingServerCaCertificate, ''), '')]",
       "keyVaultName": "[coalesce(steps('keyVault').keyVaultName, '')]",
-      "enablePurgeProtection": "[steps('keyVault').enablePurgeProtection]"
+      "enablePurgeProtection": "[steps('keyVault').enablePurgeProtection]",
+      "keyVaultResourceGroup": "[if(equals(steps('keyVault').resourceGroupMode, 'other'), steps('keyVault').resourceGroup, '')]"
     }
   }
 }

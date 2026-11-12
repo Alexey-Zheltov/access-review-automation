@@ -11,8 +11,9 @@
 //   - web app: private endpoint, public network access disabled. Users, deployments and the Kudu console work only from
 //     your network. Your DNS must resolve <appName>.azurewebsites.net and <appName>.scm.azurewebsites.net to the private endpoint.
 //   - PostgreSQL Flexible Server: private endpoint, public network access disabled.
-//   - Key Vault: private endpoint, public network access disabled. The web app reads the client secret and the connection
-//     string through Key Vault references with the user-assigned managed identity id-<appName>.
+//   - Key Vault (new, in this resource group or in keyVaultResourceGroup): private endpoint, public network access disabled.
+//     The web app reads the client secret and the connection string through Key Vault references with the user-assigned
+//     managed identity id-<appName>, which gets Key Vault Secrets User on this vault (keyvault-private.bicep).
 // Private DNS zones privatelink.azurewebsites.net, privatelink.postgres.database.azure.com, privatelink.vaultcore.azure.net:
 // your existing zones (for example in a hub subscription), or new zones in this resource group, linked to the VNet of the app subnet.
 //
@@ -87,11 +88,20 @@ param postgresAdminLogin string = 'accessreviewadmin'
 @secure()
 param postgresAdminPassword string = ''
 
-@description('PostgreSQL compute size. See docs/SIZING.md.')
-param postgresSkuName string = 'Standard_B2s'
-
-@allowed(['Burstable', 'GeneralPurpose', 'MemoryOptimized'])
-param postgresSkuTier string = 'Burstable'
+@description('PostgreSQL compute size. The tier follows from the name: Standard_B = Burstable, Standard_D = General Purpose, Standard_E = Memory Optimized. Burstable sizes are not available for every subscription in every region (SkuNotAvailable). See docs/SIZING.md.')
+@allowed([
+  'Standard_B1ms'
+  'Standard_B2s'
+  'Standard_B2ms'
+  'Standard_D2ds_v5'
+  'Standard_D4ds_v5'
+  'Standard_D8ds_v5'
+  'Standard_D2ads_v5'
+  'Standard_D4ads_v5'
+  'Standard_E2ds_v5'
+  'Standard_E4ds_v5'
+])
+param postgresSkuName string = 'Standard_D2ds_v5'
 
 @description('PostgreSQL storage in GB (32, 64, 128, 256, 512, ...). Storage auto-grow is on.')
 param postgresStorageSizeGB int = 32
@@ -103,6 +113,9 @@ param postgresVersion string = '18'
 @maxLength(24)
 param keyVaultName string = ''
 
+@description('Resource group of the Key Vault, in the same subscription. It must exist. Empty = the resource group of the deployment. The Key Vault always has a private endpoint and no public access.')
+param keyVaultResourceGroup string = ''
+
 @description('Purge protection of the Key Vault. With it, a deleted vault name stays reserved until the retention period ends.')
 param enablePurgeProtection bool = true
 
@@ -110,14 +123,15 @@ param tags object = {
   workload: 'access-review'
 }
 
-var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var portalUrl = 'https://${appName}.azurewebsites.net'
 var databaseName = 'accessreview'
 var createPostgres = databaseServer == 'AzurePostgreSQL'
 var useManagedIdentity = createPostgres && databaseAuthentication == 'ManagedIdentity'
 var identityName = 'id-${appName}'
+var postgresSkuTier = startsWith(postgresSkuName, 'Standard_B') ? 'Burstable' : (startsWith(postgresSkuName, 'Standard_E') ? 'MemoryOptimized' : 'GeneralPurpose')
 var serverName = empty(postgresServerName) ? 'psql-${appName}' : postgresServerName
 var vaultName = empty(keyVaultName) ? 'kv-${uniqueString(resourceGroup().id, appName)}' : keyVaultName
+var vaultResourceGroup = empty(keyVaultResourceGroup) ? resourceGroup().name : keyVaultResourceGroup
 
 // Both subnets must be subnet resource ids. The check stops the deployment before anything is created.
 var subnetIdPart = '/providers/microsoft.network/virtualnetworks/'
@@ -276,92 +290,24 @@ var connectionString = !createPostgres
       : 'Host=${postgresHost};Port=5432;Database=${databaseName};Username=${postgresAdminLogin};Password=${postgresAdminPassword};Ssl Mode=VerifyFull'
 
 // ------------------------------------------------------------------------------------------------ secrets
-resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: vaultName
-  location: location
-  tags: tags
-  properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    enableRbacAuthorization: true
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 90
-    enablePurgeProtection: enablePurgeProtection ? true : null
-    publicNetworkAccess: 'Disabled'
-    networkAcls: {
-      defaultAction: 'Deny'
-      bypass: 'None'
-    }
-  }
-}
-
-resource clientSecretValue 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name: 'portal-client-secret'
-  properties: {
-    value: clientSecret
-    contentType: 'Client secret of the app registration'
-  }
-}
-
-resource connectionStringValue 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
-  parent: vault
-  name: 'portal-db-connection'
-  properties: {
-    value: connectionString
-    contentType: 'Npgsql connection string'
-  }
-}
-
-resource vaultEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
-  name: 'pe-${vaultName}'
-  location: location
-  tags: tags
-  properties: {
-    subnet: {
-      id: endpointSubnetId
-    }
-    privateLinkServiceConnections: [
-      {
-        name: 'vault'
-        properties: {
-          privateLinkServiceId: vault.id
-          groupIds: ['vault']
-        }
-      }
-    ]
-  }
-}
-
-resource vaultEndpointDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
-  parent: vaultEndpoint
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: 'vault'
-        properties: {
-          privateDnsZoneId: vaultZoneId
-        }
-      }
-    ]
+// Key Vault with a private endpoint only (public network access disabled), in the resource group keyVaultResourceGroup.
+module keyVault 'keyvault-private.bicep' = {
+  name: 'keyvault-${uniqueString(vaultName)}'
+  scope: resourceGroup(vaultResourceGroup)
+  params: {
+    vaultName: vaultName
+    location: location
+    tags: tags
+    enablePurgeProtection: enablePurgeProtection
+    clientSecret: clientSecret
+    connectionString: connectionString
+    endpointSubnetId: endpointSubnetId
+    privateDnsZoneId: vaultZoneId
+    identityId: identity.id
+    identityPrincipalId: identity.properties.principalId
   }
   dependsOn: [vaultZoneLink]
 }
-
-resource secretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(vault.id, identity.id, keyVaultSecretsUserRoleId)
-  scope: vault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
-    principalId: identity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // ------------------------------------------------------------------------------------------------ web app
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: 'asp-${appName}'
@@ -389,7 +335,7 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
     }
   }
   // The identity can read the secrets before the app settings are applied.
-  dependsOn: [secretsUser, vaultEndpointDns]
+  dependsOn: [keyVault]
   properties: {
     serverFarmId: plan.id
     keyVaultReferenceIdentity: identity.id
@@ -433,7 +379,7 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     AzureAd__ClientSecret: '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=portal-client-secret)'
     ConnectionStrings__DefaultConnection: '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=portal-db-connection)'
   }
-  dependsOn: [clientSecretValue, connectionStringValue, postgresEndpointDns]
+  dependsOn: [keyVault, postgresEndpointDns]
 }
 
 resource logs 'Microsoft.Web/sites/config@2024-04-01' = {
@@ -516,4 +462,5 @@ output postgresFqdn string = postgresHost
 @description('User name of the portal in PostgreSQL. Managed identity: the identity name.')
 output postgresUser string = useManagedIdentity ? identityName : (createPostgres ? postgresAdminLogin : '')
 output keyVaultName string = vaultName
+output keyVaultResourceGroup string = vaultResourceGroup
 output identityName string = identityName

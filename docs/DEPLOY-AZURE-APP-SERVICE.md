@@ -245,7 +245,7 @@ Use this option when the portal must be reachable only from your network. The te
 |---|---|
 | Web app | Private endpoint, public network access disabled. VNet integration: all outbound traffic goes through your network. |
 | PostgreSQL | Azure Database for PostgreSQL Flexible Server with a private endpoint, public network access disabled. Or your own server (option C). |
-| Key Vault | Private endpoint, public network access disabled. It keeps the client secret and the connection string. |
+| Key Vault | A new Key Vault with a private endpoint, public network access disabled. It keeps the client secret and the connection string. In the resource group of the deployment, or in another existing resource group of the same subscription (`keyVaultResourceGroup`; in the portal form: tab **Key Vault**). |
 | Subnets (existing) | **App Service subnet**: only for App Service and delegated to `Microsoft.Web/serverFarms` before the deployment (the template does not change your subnets), `/28` or larger, `/26` recommended. **Private endpoint subnet**: the three private endpoints. Both in the region of the deployment. |
 | Private DNS zones | `privatelink.azurewebsites.net`, `privatelink.postgres.database.azure.com`, `privatelink.vaultcore.azure.net`: your existing zones, or new zones in the resource group, linked to the virtual network of the App Service subnet. |
 
@@ -283,6 +283,8 @@ az deployment group create --resource-group $resourceGroup --name accessreview `
 ```
 
 - Existing zones: add `webAppPrivateDnsZoneResourceId=<id> postgresPrivateDnsZoneResourceId=<id> keyVaultPrivateDnsZoneResourceId=<id>`.
+- Key Vault in another resource group: add `keyVaultResourceGroup=<resource group>`. You need Contributor and Role Based Access Control Administrator there too.
+- `SkuNotAvailable` for PostgreSQL: this size is not available for your subscription in this region. Option D uses General Purpose `Standard_D2ds_v5` by default; Burstable sizes (`postgresSkuName=Standard_B2s`) are cheaper but not available everywhere. Choose another `postgresSkuName` and deploy again with the same values. The tier follows from the size.
 - Your own PostgreSQL server: add `databaseServer=ExistingServer existingServerConnectionString=$dbConnection` (option C).
 - The deployment stops before it creates anything if a subnet value is not a subnet resource id.
 - Delegate the App Service subnet first: `az network vnet subnet update --resource-group <network resource group> --vnet-name <virtual network> --name <subnet> --delegations Microsoft.Web/serverFarms`. Without the delegation the web app fails with "Subnet ... is missing a delegation to Microsoft.Web/serverFarms".

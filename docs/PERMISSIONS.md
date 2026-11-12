@@ -171,6 +171,7 @@ In many organizations the network is managed centrally: the virtual network is i
 | Links a new private DNS zone to the existing virtual network | `Microsoft.Network/virtualNetworks/join/action` | **Network Contributor** on the virtual network |
 | Adds the DNS record of the Key Vault private endpoint to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.vaultcore.azure.net` |
 | Option D: adds the DNS records of the web app private endpoint (`<app-name>` and `<app-name>.scm`) to an existing zone | `Microsoft.Network/privateDnsZones/join/action` | **Private DNS Zone Contributor** on the zone `privatelink.azurewebsites.net` |
+| Option D with `keyVaultResourceGroup`: creates the Key Vault, its private endpoint and the role assignment of the identity in another resource group | write and `Microsoft.Authorization/roleAssignments/write` | **Contributor** and **Role Based Access Control Administrator** on that resource group |
 | PostgreSQL adds its DNS record to an existing zone | write on the zone | **Private DNS Zone Contributor** on the PostgreSQL zone |
 
 Owner on the subscription of the portal does not give these rights when the network or the zones are in another subscription. The error is `LinkedAuthorizationFailed` (section 9). In this case the private endpoint itself is created, and only its DNS record fails.
