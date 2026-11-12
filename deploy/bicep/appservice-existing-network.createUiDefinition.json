@@ -376,7 +376,7 @@
                   "method": "POST",
                   "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
                   "body": {
-                    "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net') | project id, name, resourceGroup, subscriptionId | order by resourceGroup asc"
+                    "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net') | join kind=leftouter (resourcecontainers | where type =~ 'microsoft.resources/subscriptions' | project subscriptionId, subscriptionName = name) on subscriptionId | project id, name, resourceGroup, subscription = coalesce(subscriptionName, subscriptionId) | order by subscription asc, resourceGroup asc"
                   }
                 }
               },
@@ -384,11 +384,11 @@
                 "name": "siteZone",
                 "type": "Microsoft.Common.DropDown",
                 "label": "Zone privatelink.azurewebsites.net",
-                "toolTip": "The zones with this name in the subscriptions that you can read, with their resource group and subscription.",
+                "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
                 "filter": true,
                 "constraints": {
                   "required": true,
-                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, '\",\"description\":\"Subscription ', z.subscriptionId, '\",\"value\":\"', z.id, '\"}')))]"
+                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
                 },
                 "visible": "[equals(steps('network').dns.dnsMode, 'existing')]"
               },
@@ -405,11 +405,11 @@
                 "name": "postgresZone",
                 "type": "Microsoft.Common.DropDown",
                 "label": "Zone privatelink.postgres.database.azure.com",
-                "toolTip": "The zones with this name in the subscriptions that you can read, with their resource group and subscription.",
+                "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
                 "filter": true,
                 "constraints": {
                   "required": true,
-                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, '\",\"description\":\"Subscription ', z.subscriptionId, '\",\"value\":\"', z.id, '\"}')))]"
+                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
                 },
                 "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL'))]"
               },
@@ -426,11 +426,11 @@
                 "name": "vaultZone",
                 "type": "Microsoft.Common.DropDown",
                 "label": "Zone privatelink.vaultcore.azure.net",
-                "toolTip": "The zones with this name in the subscriptions that you can read, with their resource group and subscription.",
+                "toolTip": "The zones with this name in the subscriptions that you can read: resource group (subscription).",
                 "filter": true,
                 "constraints": {
                   "required": true,
-                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, '\",\"description\":\"Subscription ', z.subscriptionId, '\",\"value\":\"', z.id, '\"}')))]"
+                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, ' (', z.subscription, ')\",\"value\":\"', z.id, '\"}')))]"
                 },
                 "visible": "[equals(steps('network').dns.dnsMode, 'existing')]"
               },
