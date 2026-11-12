@@ -37,7 +37,7 @@
               "message": "2-58 characters: lower-case letters, digits and hyphens. No hyphen at the start or the end."
             },
             {
-              "isValid": "[not(equals(basics('nameApi').nameAvailable, false))]",
+              "isValid": "[or(empty(basics('appName')), not(equals(basics('nameApi').nameAvailable, false)))]",
               "message": "[concat('This name is not available: ', basics('nameApi').message)]"
             }
           ]
@@ -370,79 +370,78 @@
                 "visible": "[equals(steps('network').dns.dnsMode, 'new')]"
               },
               {
-                "name": "siteZone",
-                "type": "Microsoft.Solutions.ResourceSelector",
-                "label": "Zone privatelink.azurewebsites.net",
-                "resourceType": "Microsoft.Network/privateDnsZones",
-                "options": {
-                  "filter": {
-                    "subscription": "all",
-                    "location": "all"
+                "name": "zonesApi",
+                "type": "Microsoft.Solutions.ArmApiControl",
+                "request": {
+                  "method": "POST",
+                  "path": "/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+                  "body": {
+                    "query": "resources | where type =~ 'microsoft.network/privatednszones' and name in~ ('privatelink.azurewebsites.net', 'privatelink.postgres.database.azure.com', 'privatelink.vaultcore.azure.net') | project id, name, resourceGroup, subscriptionId | order by resourceGroup asc"
                   }
-                },
+                }
+              },
+              {
+                "name": "siteZone",
+                "type": "Microsoft.Common.DropDown",
+                "label": "Zone privatelink.azurewebsites.net",
+                "toolTip": "The zones with this name in the subscriptions that you can read, with their resource group and subscription.",
+                "filter": true,
                 "constraints": {
-                  "required": true
+                  "required": true,
+                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, '\",\"description\":\"Subscription ', z.subscriptionId, '\",\"value\":\"', z.id, '\"}')))]"
                 },
                 "visible": "[equals(steps('network').dns.dnsMode, 'existing')]"
               },
               {
-                "name": "siteZoneWrong",
+                "name": "siteZoneNone",
                 "type": "Microsoft.Common.InfoBox",
                 "options": {
-                  "style": "Error",
-                  "text": "Choose the zone privatelink.azurewebsites.net."
+                  "style": "Warning",
+                  "text": "No zone privatelink.azurewebsites.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
                 },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), not(empty(steps('network').dns.siteZone)), not(equals(toLower(steps('network').dns.siteZone.name), 'privatelink.azurewebsites.net')))]"
+                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), not(empty(steps('network').dns.zonesApi)), empty(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.azurewebsites.net'))))]"
               },
               {
                 "name": "postgresZone",
-                "type": "Microsoft.Solutions.ResourceSelector",
+                "type": "Microsoft.Common.DropDown",
                 "label": "Zone privatelink.postgres.database.azure.com",
-                "resourceType": "Microsoft.Network/privateDnsZones",
-                "options": {
-                  "filter": {
-                    "subscription": "all",
-                    "location": "all"
-                  }
-                },
+                "toolTip": "The zones with this name in the subscriptions that you can read, with their resource group and subscription.",
+                "filter": true,
                 "constraints": {
-                  "required": true
+                  "required": true,
+                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, '\",\"description\":\"Subscription ', z.subscriptionId, '\",\"value\":\"', z.id, '\"}')))]"
                 },
                 "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL'))]"
               },
               {
-                "name": "postgresZoneWrong",
+                "name": "postgresZoneNone",
                 "type": "Microsoft.Common.InfoBox",
                 "options": {
-                  "style": "Error",
-                  "text": "Choose the zone privatelink.postgres.database.azure.com."
+                  "style": "Warning",
+                  "text": "No zone privatelink.postgres.database.azure.com found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
                 },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL'), not(empty(steps('network').dns.postgresZone)), not(equals(toLower(steps('network').dns.postgresZone.name), 'privatelink.postgres.database.azure.com')))]"
+                "visible": "[and(and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), not(empty(steps('network').dns.zonesApi)), empty(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.postgres.database.azure.com'))))]"
               },
               {
                 "name": "vaultZone",
-                "type": "Microsoft.Solutions.ResourceSelector",
+                "type": "Microsoft.Common.DropDown",
                 "label": "Zone privatelink.vaultcore.azure.net",
-                "resourceType": "Microsoft.Network/privateDnsZones",
-                "options": {
-                  "filter": {
-                    "subscription": "all",
-                    "location": "all"
-                  }
-                },
+                "toolTip": "The zones with this name in the subscriptions that you can read, with their resource group and subscription.",
+                "filter": true,
                 "constraints": {
-                  "required": true
+                  "required": true,
+                  "allowedValues": "[map(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net')), (z) => parse(concat('{\"label\":\"', z.resourceGroup, '\",\"description\":\"Subscription ', z.subscriptionId, '\",\"value\":\"', z.id, '\"}')))]"
                 },
                 "visible": "[equals(steps('network').dns.dnsMode, 'existing')]"
               },
               {
-                "name": "vaultZoneWrong",
+                "name": "vaultZoneNone",
                 "type": "Microsoft.Common.InfoBox",
                 "options": {
-                  "style": "Error",
-                  "text": "Choose the zone privatelink.vaultcore.azure.net."
+                  "style": "Warning",
+                  "text": "No zone privatelink.vaultcore.azure.net found in the subscriptions that you can read. Choose Create new zones, or ask for Reader on the zone."
                 },
-                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), not(empty(steps('network').dns.vaultZone)), not(equals(toLower(steps('network').dns.vaultZone.name), 'privatelink.vaultcore.azure.net')))]"
+                "visible": "[and(equals(steps('network').dns.dnsMode, 'existing'), not(empty(steps('network').dns.zonesApi)), empty(filter(coalesce(steps('network').dns.zonesApi.data, parse('[]')), (z) => equals(toLower(z.name), 'privatelink.vaultcore.azure.net'))))]"
               }
             ]
           }
@@ -490,9 +489,9 @@
       "clientSecret": "[basics('clientSecret')]",
       "appSubnetResourceId": "[steps('network').appSubnet]",
       "privateEndpointSubnetResourceId": "[steps('network').endpointSubnet]",
-      "webAppPrivateDnsZoneResourceId": "[if(equals(steps('network').dns.dnsMode, 'existing'), steps('network').dns.siteZone.id, '')]",
-      "postgresPrivateDnsZoneResourceId": "[if(and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), steps('network').dns.postgresZone.id, '')]",
-      "keyVaultPrivateDnsZoneResourceId": "[if(equals(steps('network').dns.dnsMode, 'existing'), steps('network').dns.vaultZone.id, '')]",
+      "webAppPrivateDnsZoneResourceId": "[if(equals(steps('network').dns.dnsMode, 'existing'), steps('network').dns.siteZone, '')]",
+      "postgresPrivateDnsZoneResourceId": "[if(and(equals(steps('network').dns.dnsMode, 'existing'), equals(steps('database').databaseServer, 'AzurePostgreSQL')), steps('network').dns.postgresZone, '')]",
+      "keyVaultPrivateDnsZoneResourceId": "[if(equals(steps('network').dns.dnsMode, 'existing'), steps('network').dns.vaultZone, '')]",
       "databaseServer": "[steps('database').databaseServer]",
       "databaseAuthentication": "[if(equals(steps('database').databaseServer, 'AzurePostgreSQL'), steps('database').databaseAuthentication, 'ManagedIdentity')]",
       "postgresAdminPassword": "[if(and(equals(steps('database').databaseServer, 'AzurePostgreSQL'), equals(steps('database').databaseAuthentication, 'Password')), steps('database').postgresAdminPassword, '')]",

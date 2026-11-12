@@ -262,7 +262,7 @@ Agree with your network team before you deploy:
 https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FAlexey-Zheltov%2Faccess-review-automation%2Fmain%2Fdeploy%2Fbicep%2Fappservice-existing-network.createUiDefinition.json
 ```
 
-The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`.
+The form is `deploy/bicep/appservice-existing-network.createUiDefinition.json`. The portal asks "Do you trust the authors code?": select **Yes, I trust the authors**. The form then reads your virtual networks, subnets and private DNS zones with your rights (read only) and lists them.
 
 **Commands.** Find the resource ids of the subnets:
 
